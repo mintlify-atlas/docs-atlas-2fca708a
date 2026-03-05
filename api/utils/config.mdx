@@ -536,6 +536,71 @@ config = {
 }
 ```
 
+## fetch_example_model
+
+Download an example model with data and configuration from the hls4ml example-models repository.
+
+```python
+hls4ml.utils.fetch_example_model(model_name, backend='Vivado')
+```
+
+### Parameters
+
+<ParamField path="model_name" type="str" required>
+  Name of the example model (e.g., `'KERAS_3layer.json'`). Use `fetch_example_list()` to see available models.
+</ParamField>
+
+<ParamField path="backend" type="str" default="Vivado">
+  Backend to use for model conversion.
+</ParamField>
+
+### Returns
+
+<ResponseField name="config" type="dict">
+  Configuration dictionary ready to use with `convert_from_config()`.
+</ResponseField>
+
+### Example
+
+```python
+import hls4ml
+
+# Fetch an example model
+config = hls4ml.utils.fetch_example_model('KERAS_3layer.json')
+
+# Convert to HLS
+hls_model = hls4ml.converters.convert_from_config(config)
+
+# Build and test
+hls_model.compile()
+hls_model.build()
+```
+
+## fetch_example_list
+
+Display a list of all available example models in the repository.
+
+```python
+hls4ml.utils.fetch_example_list()
+```
+
+Prints a formatted list of available example models from the [example-models repository](https://github.com/fastmachinelearning/example-models).
+
+### Example
+
+```python
+import hls4ml
+
+# List all available example models
+hls4ml.utils.fetch_example_list()
+# Output:
+# {
+#     'KERAS_3layer.json': 'Simple 3-layer Keras model',
+#     'pytorch_cnn.pt': 'CNN for MNIST',
+#     ...
+# }
+```
+
 ## See Also
 
 - [Keras Converter](/api/converters/keras)
