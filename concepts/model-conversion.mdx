@@ -1,0 +1,520 @@
+---
+title: Model Conversion
+description: Converting ML models to optimized FPGA firmware
+---
+
+## Conversion Process
+
+The model conversion process in hls4ml transforms a trained machine learning model into synthesizable HLS code. The conversion is highly configurable, allowing you to balance latency, resource usage, and accuracy.
+
+## Basic Conversion
+
+### From Keras Models
+
+```python
+import hls4ml
+import tensorflow as tf
+
+# Load your trained model
+model = tf.keras.models.load_model('my_model.h5')
+
+# Create configuration
+config = hls4ml.utils.config_from_keras_model(model)
+
+# Convert to HLS
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='my-hls-test',
+    backend='Vivado',
+    io_type='io_parallel'
+)
+```
+
+Converter function: `hls4ml/converters/__init__.py:169`
+
+### From PyTorch Models
+
+```python
+import torch
+import hls4ml
+
+# Your PyTorch model
+model = torch.nn.Sequential(
+    torch.nn.Linear(16, 64),
+    torch.nn.ReLU(),
+    torch.nn.Linear(64, 10)
+)
+
+# Convert to HLS
+hls_model = hls4ml.converters.convert_from_pytorch_model(
+    model,
+    input_shape=(None, 16),
+    output_dir='pytorch-hls-test',
+    backend='Vivado',
+    io_type='io_parallel'
+)
+```
+
+<Note>
+  PyTorch uses "channels_first" format while hls4ml expects "channels_last". The converter automatically handles this transformation for `io_parallel`, but you may need to transpose manually for `io_stream`.
+</Note>
+
+Converter function: `hls4ml/converters/__init__.py:251`
+
+### From ONNX Models
+
+```python
+import onnx
+import hls4ml
+
+# Load ONNX model
+onnx_model = onnx.load('model.onnx')
+
+# Convert to HLS
+hls_model = hls4ml.converters.convert_from_onnx_model(
+    onnx_model,
+    output_dir='onnx-hls-test',
+    backend='Vivado',
+    io_type='io_parallel'
+)
+```
+
+Converter function: `hls4ml/converters/__init__.py:323`
+
+## Configuration Deep Dive
+
+### Creating HLS Config
+
+The `hls_config` dictionary controls all aspects of the conversion:
+
+```python
+config = hls4ml.utils.config_from_keras_model(
+    model,
+    granularity='name',  # 'model', 'type', or 'name'
+    default_precision='fixed<16,6>',
+    default_reuse_factor=1
+)
+```
+
+Config creation: `hls4ml/utils/config.py:115`
+
+### Precision Configuration
+
+Precision is specified using the format `fixed<width,integer>` or `ap_fixed<width,integer>`:
+
+- `width` - Total number of bits
+- `integer` - Number of integer bits (left of decimal point)
+- Fractional bits = width - integer
+
+```python
+config = {
+    'Model': {
+        'Precision': 'fixed<16,6>',  # 16 total bits, 6 integer bits
+        'ReuseFactor': 1
+    }
+}
+```
+
+<Tip>
+  Start with `fixed<16,6>` as a baseline, then adjust based on your accuracy requirements and available resources.
+</Tip>
+
+### Reuse Factor
+
+The **reuse factor** determines hardware parallelism and resource usage:
+
+- **ReuseFactor = 1** - Fully parallel, lowest latency, highest resource usage
+- **ReuseFactor = N** - Operations are serialized N times, lower resource usage
+
+```python
+config = {
+    'Model': {
+        'Precision': 'fixed<16,6>',
+        'ReuseFactor': 1  # Fully parallel
+    }
+}
+```
+
+For a Dense layer with 128 inputs and 64 outputs:
+- `ReuseFactor = 1` - 8,192 multipliers (128 × 64)
+- `ReuseFactor = 8` - 1,024 multipliers, 8× longer latency
+- `ReuseFactor = 64` - 128 multipliers, 64× longer latency
+
+Configuration handling: `hls4ml/model/graph.py:34`
+
+### IO Types
+
+hls4ml supports two I/O implementation styles:
+
+#### io_parallel
+
+Data is passed as arrays, fully parallel access:
+
+```python
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    io_type='io_parallel',
+    backend='Vivado'
+)
+```
+
+- ✅ Lowest latency
+- ✅ Simple interface
+- ❌ High I/O pin count for large models
+- ❌ Not suitable for large data sizes
+
+#### io_stream
+
+Data is passed as streaming interfaces (FIFOs/AXI-Stream):
+
+```python
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    io_type='io_stream',
+    backend='Vivado'
+)
+```
+
+- ✅ Minimal I/O pins
+- ✅ Supports large models
+- ✅ Compatible with streaming architectures
+- ❌ Slightly higher latency
+- ❌ More complex dataflow
+
+Example YAML config: `hls4ml/converters/__init__.py:67`
+
+## Granular Configuration
+
+### Model-Level Configuration
+
+Applies to all layers unless overridden:
+
+```python
+config = {
+    'Model': {
+        'Precision': 'fixed<16,6>',
+        'ReuseFactor': 1,
+        'Strategy': 'Latency'
+    }
+}
+```
+
+### Layer-Type Configuration
+
+Applies to all layers of a specific type:
+
+```python
+config = {
+    'Model': {
+        'Precision': 'fixed<16,6>',
+        'ReuseFactor': 1
+    },
+    'LayerType': {
+        'Dense': {
+            'Precision': 'fixed<18,8>',
+            'ReuseFactor': 2
+        },
+        'Activation': {
+            'Precision': 'fixed<18,8>'
+        }
+    }
+}
+```
+
+### Layer-Name Configuration
+
+Applies to specific layers (highest priority):
+
+```python
+config = {
+    'Model': {
+        'Precision': 'fixed<16,6>',
+        'ReuseFactor': 1
+    },
+    'LayerName': {
+        'dense_1': {
+            'Precision': 'fixed<32,16>',  # Higher precision for critical layer
+            'ReuseFactor': 1,
+            'Strategy': 'Latency'
+        },
+        'dense_2': {
+            'Precision': 'fixed<12,4>',   # Lower precision for less critical layer
+            'ReuseFactor': 8,              # Higher reuse to save resources
+            'Strategy': 'Resource'
+        }
+    }
+}
+```
+
+Configuration hierarchy: `hls4ml/model/graph.py:90`
+
+## Advanced Configuration
+
+### Strategy Selection
+
+Implementation strategy affects resource/latency trade-offs:
+
+```python
+config['LayerName']['conv2d_1'] = {
+    'Strategy': 'Latency',  # Options: 'Latency', 'Resource', 'Resource_Unrolled'
+    'ReuseFactor': 1
+}
+```
+
+- **Latency** - Fully pipelined, all operations in parallel
+- **Resource** - Sequential implementation, minimal resources
+- **Resource_Unrolled** - Balanced approach with partial parallelism
+
+### Precision per Tensor
+
+For fine-grained control, specify precision for individual tensors:
+
+```python
+config['LayerName']['dense_1'] = {
+    'Precision': {
+        'weight': 'fixed<8,4>',     # 8-bit weights
+        'bias': 'fixed<16,8>',      # 16-bit biases
+        'result': 'fixed<16,6>'     # 16-bit outputs
+    }
+}
+```
+
+### Convolutional Implementation
+
+For Conv layers, choose the implementation style:
+
+```python
+config['LayerName']['conv2d_1'] = {
+    'ConvImplementation': 'LineBuffer',  # Options: 'LineBuffer', 'Encoded'
+    'ParallelizationFactor': 1
+}
+```
+
+- **LineBuffer** - Streaming convolution with line buffers
+- **Encoded** - Optimized for small kernels
+
+Backend attributes: `hls4ml/backends/vivado/vivado_backend.py:80`
+
+### RNN-Specific Options
+
+For recurrent layers:
+
+```python
+config['LayerName']['lstm_1'] = {
+    'ReuseFactor': 1,
+    'RecurrentReuseFactor': 1,  # Separate reuse factor for recurrent weights
+    'Static': True,              # Static (fixed timesteps) vs dynamic
+    'TableSize': 1024            # LUT size for activation functions
+}
+```
+
+RNN attributes: `hls4ml/backends/vivado/vivado_backend.py:48`
+
+## YAML Configuration
+
+You can also use YAML files for configuration:
+
+```yaml
+KerasH5: my_keras_model.h5
+OutputDir: my-hls-test
+ProjectName: myproject
+Part: xcvu13p-flga2577-2-e
+ClockPeriod: 5
+IOType: io_stream
+HLSConfig:
+  Model:
+    Precision: ap_fixed<16,6>
+    ReuseFactor: 10
+  LayerName:
+    dense_1:
+      Precision: ap_fixed<32,16>
+      ReuseFactor: 1
+    dense_2:
+      Precision: ap_fixed<12,4>
+      ReuseFactor: 8
+```
+
+Then convert using:
+
+```python
+import hls4ml
+
+hls_model = hls4ml.converters.convert_from_config('config.yml')
+```
+
+YAML parsing: `hls4ml/converters/__init__.py:61`
+
+## Backend-Specific Parameters
+
+### Vivado/Vitis Backends
+
+```python
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    backend='Vivado',
+    board='pynq-z2',              # Or specify 'part' directly
+    part='xc7z020clg400-1',       # FPGA part number
+    clock_period=5,               # Clock period in ns
+    clock_uncertainty='12.5%',    # Clock uncertainty
+    io_type='io_parallel'
+)
+```
+
+Vivado backend: `hls4ml/backends/vivado/vivado_backend.py:1`
+
+### Quartus Backend (Intel FPGAs)
+
+```python
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    backend='Quartus',
+    part='Arria10',
+    clock_period=5,
+    io_type='io_parallel'
+)
+```
+
+Quartus backend: `hls4ml/backends/quartus/quartus_backend.py:27`
+
+## Optimization Passes
+
+hls4ml applies various optimization passes during conversion. You can control these:
+
+```python
+config['HLSConfig']['Flows'] = ['convert']  # Minimal conversion
+
+# Or skip specific optimizers
+config['HLSConfig']['SkipOptimizers'] = ['fuse_consecutive_batch_normalization']
+
+# Or add custom optimizers
+config['HLSConfig']['Optimizers'] = ['custom_optimizer_name']
+```
+
+Optimization system: `hls4ml/model/optimizer.py`
+
+## Verification
+
+### Software Prediction
+
+Test the converted model in software:
+
+```python
+import numpy as np
+
+# Compile the model
+hls_model.compile()
+
+# Run prediction
+X_test = np.random.rand(100, 16)
+y_keras = model.predict(X_test)
+y_hls = hls_model.predict(X_test)
+
+# Check accuracy
+np.testing.assert_allclose(y_hls, y_keras, rtol=1e-2, atol=0.01)
+```
+
+### C Simulation
+
+Run HLS C simulation:
+
+```python
+# Write the project
+hls_model.write()
+
+# Build with C simulation
+hls_model.build(csim=True)
+```
+
+### Co-simulation
+
+Run RTL co-simulation (requires synthesis):
+
+```python
+# Build with synthesis and co-simulation
+hls_model.build(csim=True, synth=True, cosim=True)
+```
+
+## Common Patterns
+
+### Quick Conversion for Testing
+
+```python
+# Minimal config for quick testing
+config = hls4ml.utils.config_from_keras_model(model)
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='quick-test'
+)
+hls_model.compile()
+```
+
+### Resource-Constrained Conversion
+
+```python
+# Optimize for minimal resource usage
+config = hls4ml.utils.config_from_keras_model(
+    model,
+    default_precision='fixed<8,3>',  # Lower precision
+    default_reuse_factor=32           # Higher reuse
+)
+config['Model']['Strategy'] = 'Resource'
+```
+
+### Ultra-Low Latency Conversion
+
+```python
+# Optimize for minimum latency
+config = hls4ml.utils.config_from_keras_model(
+    model,
+    default_precision='fixed<16,6>',
+    default_reuse_factor=1  # Fully parallel
+)
+config['Model']['Strategy'] = 'Latency'
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    io_type='io_parallel',
+    backend='Vivado'
+)
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Start with default settings">
+    Begin with `fixed<16,6>` and `ReuseFactor=1`, then adjust based on synthesis results.
+  </Accordion>
+  
+  <Accordion title="Profile your model">
+    Use profiling to identify resource bottlenecks:
+    ```python
+    hls4ml.model.profiling.numerical(keras_model, hls_model, X_test)
+    ```
+  </Accordion>
+  
+  <Accordion title="Layer-specific tuning">
+    Apply different precision and reuse factors to different layers based on their sensitivity and resource usage.
+  </Accordion>
+  
+  <Accordion title="Validate frequently">
+    Check accuracy after each configuration change using software simulation before running synthesis.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Precision Optimization" icon="gauge-high" href="./precision-optimization">
+    Learn how to optimize fixed-point precision
+  </Card>
+  
+  <Card title="HLS Backends" icon="microchip" href="./hls-backends">
+    Understand backend-specific features
+  </Card>
+</CardGroup>

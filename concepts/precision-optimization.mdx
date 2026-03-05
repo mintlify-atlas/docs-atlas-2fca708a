@@ -1,0 +1,639 @@
+---
+title: Precision Optimization
+description: Mastering fixed-point arithmetic and precision configuration for optimal FPGA performance
+---
+
+## Why Fixed-Point?
+
+FPGAs excel at custom fixed-point arithmetic, offering significant advantages over floating-point:
+
+- **Resource Efficiency** - Fixed-point operations use fewer LUTs and DSPs
+- **Power Efficiency** - Lower power consumption than floating-point
+- **Performance** - Higher throughput and lower latency
+- **Predictable Behavior** - Deterministic rounding and overflow
+
+<Note>
+  A 32-bit floating-point multiplier uses ~5x more resources than a 16-bit fixed-point multiplier on FPGAs.
+</Note>
+
+## Fixed-Point Representation
+
+### Format Specification
+
+Fixed-point numbers are specified as `fixed<W,I>` or `ap_fixed<W,I>`:
+
+- **W** (Width) - Total number of bits
+- **I** (Integer) - Number of integer bits (left of decimal point)
+- **F** (Fractional) - Number of fractional bits = W - I
+
+```python
+# Examples
+'fixed<16,6>'   # 16 bits total, 6 integer, 10 fractional
+'fixed<8,3>'    # 8 bits total, 3 integer, 5 fractional
+'fixed<32,16>'  # 16 bits total, 16 integer, 16 fractional
+```
+
+### Representation Range
+
+For signed fixed-point `fixed<W,I>`:
+
+- **Minimum value**: -2^(I-1)
+- **Maximum value**: 2^(I-1) - 2^(-F)
+- **Resolution**: 2^(-F)
+
+```python
+# fixed<16,6> signed
+min_value = -2^5 = -32
+max_value = 2^5 - 2^-10 ≈ 31.999
+resolution = 2^-10 ≈ 0.000977
+
+# fixed<8,3> signed  
+min_value = -2^2 = -4
+max_value = 2^2 - 2^-5 ≈ 3.969
+resolution = 2^-5 = 0.03125
+```
+
+### Unsigned Types
+
+Use `ufixed` for unsigned (non-negative) values:
+
+```python
+'ufixed<16,8>'    # 0 to 255.996
+'ap_ufixed<8,4>'  # 0 to 15.937
+```
+
+For unsigned `ufixed<W,I>`:
+- **Minimum value**: 0
+- **Maximum value**: 2^I - 2^(-F)
+
+Type definitions: `hls4ml/model/types.py:87`
+
+## Precision Configuration
+
+### Model-Level Precision
+
+Set default precision for all layers:
+
+```python
+import hls4ml
+
+config = hls4ml.utils.config_from_keras_model(
+    model,
+    default_precision='fixed<16,6>'  # Default for all layers
+)
+```
+
+### Layer-Type Precision
+
+Set precision by layer type:
+
+```python
+config = {
+    'Model': {
+        'Precision': 'fixed<16,6>',
+        'ReuseFactor': 1
+    },
+    'LayerType': {
+        'Dense': {
+            'Precision': 'fixed<18,8>'  # More precision for Dense layers
+        },
+        'Activation': {
+            'Precision': 'fixed<16,6>'  # Standard precision for activations
+        },
+        'BatchNormalization': {
+            'Precision': 'fixed<16,8>'  # Higher integer bits for BN
+        }
+    }
+}
+```
+
+### Layer-Specific Precision
+
+Fine-tune individual layers:
+
+```python
+config = {
+    'Model': {
+        'Precision': 'fixed<16,6>',
+        'ReuseFactor': 1
+    },
+    'LayerName': {
+        'dense_1': {
+            'Precision': 'fixed<32,16>'  # Critical layer needs high precision
+        },
+        'dense_2': {
+            'Precision': 'fixed<12,4>'   # Less critical, save resources
+        },
+        'activation_1': {
+            'Precision': 'fixed<16,6>'
+        }
+    }
+}
+```
+
+Configuration hierarchy: `hls4ml/model/graph.py:127`
+
+### Tensor-Level Precision
+
+Control precision for specific tensors within a layer:
+
+```python
+config['LayerName']['dense_1'] = {
+    'Precision': {
+        'weight': 'fixed<8,4>',      # 8-bit weights
+        'bias': 'fixed<16,8>',       # 16-bit biases  
+        'result': 'fixed<16,6>',     # 16-bit outputs
+        'accum': 'fixed<24,12>'      # 24-bit accumulator
+    }
+}
+```
+
+## Advanced Precision Types
+
+### Rounding Modes
+
+Control how values are rounded when precision is reduced:
+
+```python
+from hls4ml.model.types import RoundingMode
+
+# Available rounding modes:
+# - TRN: Truncate (default)
+# - RND: Round to nearest
+# - RND_ZERO: Round to nearest, ties to zero
+# - RND_INF: Round to nearest, ties to infinity
+# - RND_MIN_INF: Round to nearest, ties to -infinity
+# - RND_CONV: Convergent rounding
+
+config['LayerName']['dense_1'] = {
+    'Precision': 'fixed<16,6,RND>'  # Round instead of truncate
+}
+```
+
+Rounding modes: `hls4ml/model/types.py:50`
+
+### Saturation Modes
+
+Control overflow behavior:
+
+```python
+from hls4ml.model.types import SaturationMode
+
+# Available saturation modes:
+# - WRAP: Wrap around (default)
+# - SAT: Saturate at min/max
+# - SAT_ZERO: Saturate to zero
+# - SAT_SYM: Symmetric saturation
+
+config['LayerName']['dense_1'] = {
+    'Precision': 'fixed<16,6,RND,SAT>'  # Round and saturate
+}
+```
+
+Saturation modes: `hls4ml/model/types.py:70`
+
+### Full Precision Specification
+
+```python
+# Format: fixed<W, I, rounding, saturation, saturation_bits>
+config['LayerName']['dense_1'] = {
+    'Precision': 'ap_fixed<16,6,AP_RND,AP_SAT_SYM,1>'
+}
+```
+
+## Precision Tuning Strategies
+
+### Strategy 1: Start Conservative
+
+Begin with high precision, then reduce:
+
+```python
+# Step 1: Start with high precision
+config_high = hls4ml.utils.config_from_keras_model(
+    model,
+    default_precision='fixed<32,16>'
+)
+
+# Step 2: Verify accuracy
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model, hls_config=config_high
+)
+hls_model.compile()
+y_hls = hls_model.predict(X_test)
+accuracy_high = np.mean(np.abs(y_keras - y_hls))
+
+# Step 3: Reduce precision incrementally
+config_medium = hls4ml.utils.config_from_keras_model(
+    model,
+    default_precision='fixed<16,8>'
+)
+# ... test again ...
+
+config_low = hls4ml.utils.config_from_keras_model(
+    model,
+    default_precision='fixed<12,4>'
+)
+# ... test again ...
+```
+
+### Strategy 2: Profiling-Based
+
+Use built-in profiling to identify precision needs:
+
+```python
+import hls4ml
+from hls4ml.model import profiling
+
+# Create model with initial precision
+config = hls4ml.utils.config_from_keras_model(
+    model,
+    default_precision='fixed<16,6>'
+)
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model, hls_config=config
+)
+hls_model.compile()
+
+# Profile the model
+X_test = np.random.rand(1000, input_dim)
+profiling.numerical(keras_model, hls_model, X_test)
+
+# Analyze output to identify layers needing more precision
+```
+
+### Strategy 3: Layer-by-Layer
+
+Optimize precision layer by layer:
+
+```python
+def find_optimal_precision(model, layer_name, X_test, y_reference):
+    """Find optimal precision for a specific layer"""
+    precisions = ['fixed<8,3>', 'fixed<12,4>', 'fixed<16,6>', 'fixed<24,8>']
+    
+    results = {}
+    for prec in precisions:
+        config = hls4ml.utils.config_from_keras_model(model)
+        config['LayerName'][layer_name] = {'Precision': prec}
+        
+        hls_model = hls4ml.converters.convert_from_keras_model(
+            model, hls_config=config
+        )
+        hls_model.compile()
+        
+        y_pred = hls_model.predict(X_test)
+        mse = np.mean((y_reference - y_pred) ** 2)
+        
+        results[prec] = mse
+    
+    return min(results.items(), key=lambda x: x[1])
+```
+
+### Strategy 4: Automatic Precision (AutoQKeras)
+
+For QKeras models, precision is automatically inferred:
+
+```python
+import qkeras
+
+# QKeras model with quantized layers
+model = tf.keras.Sequential([
+    qkeras.QDense(64, 
+                  kernel_quantizer='quantized_bits(8,0,alpha=1)',
+                  bias_quantizer='quantized_bits(8,0,alpha=1)',
+                  input_shape=(16,)),
+    qkeras.QActivation('quantized_relu(8,0)'),
+    qkeras.QDense(10,
+                  kernel_quantizer='quantized_bits(8,0,alpha=1)',
+                  bias_quantizer='quantized_bits(8,0,alpha=1)')
+])
+
+# Precision is automatically extracted from quantizers
+config = hls4ml.utils.config_from_keras_model(model)
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model, hls_config=config
+)
+```
+
+## Common Precision Patterns
+
+### Pattern 1: Progressive Widening
+
+Increase precision through the network:
+
+```python
+config = {
+    'Model': {'Precision': 'fixed<16,6>', 'ReuseFactor': 1},
+    'LayerName': {
+        'dense_1': {'Precision': 'fixed<16,6>'},   # Input layer
+        'dense_2': {'Precision': 'fixed<18,7>'},   # Middle layer
+        'dense_3': {'Precision': 'fixed<20,8>'},   # Output layer
+    }
+}
+```
+
+### Pattern 2: Critical Path High Precision
+
+High precision where it matters:
+
+```python
+config = {
+    'Model': {'Precision': 'fixed<12,4>', 'ReuseFactor': 1},  # Low default
+    'LayerName': {
+        'attention_layer': {'Precision': 'fixed<32,16>'},  # Critical
+        'dense_1': {'Precision': 'fixed<12,4>'},           # Standard
+        'dense_2': {'Precision': 'fixed<12,4>'},           # Standard
+    }
+}
+```
+
+### Pattern 3: Activation-Specific
+
+Different precision for different activation types:
+
+```python
+config = {
+    'Model': {'Precision': 'fixed<16,6>', 'ReuseFactor': 1},
+    'LayerType': {
+        'Activation': {'Precision': 'fixed<16,6>'},
+        'Softmax': {'Precision': 'fixed<18,8>'},     # Softmax needs more precision
+        'TanH': {'Precision': 'fixed<18,8>'},        # TanH needs more integer bits
+    }
+}
+```
+
+### Pattern 4: Weight vs. Activation
+
+Different precision for weights and activations:
+
+```python
+config = {
+    'Model': {'Precision': 'fixed<16,6>', 'ReuseFactor': 1},
+    'LayerName': {
+        'dense_1': {
+            'Precision': {
+                'weight': 'fixed<8,4>',    # Low precision weights
+                'bias': 'fixed<16,8>',     # Higher precision bias
+                'result': 'fixed<16,6>',   # Standard output
+                'accum': 'fixed<24,12>'    # Wide accumulator
+            }
+        }
+    }
+}
+```
+
+## Precision and Resource Usage
+
+### DSP Block Usage
+
+DSP blocks on FPGAs typically support:
+
+- Xilinx DSP48E2: Up to 27×18-bit multiplication
+- Intel DSP: Up to 27×27-bit multiplication
+
+```python
+# Efficient: Fits in one DSP block
+config['LayerName']['dense_1'] = {
+    'Precision': {
+        'weight': 'fixed<18,9>',   # 18-bit multiplier input
+        'result': 'fixed<16,6>'
+    }
+}
+
+# Inefficient: Requires multiple DSP blocks
+config['LayerName']['dense_2'] = {
+    'Precision': {
+        'weight': 'fixed<32,16>',  # 32-bit multiplier
+        'result': 'fixed<32,16>'
+    }
+}
+```
+
+### Memory Bandwidth
+
+Lower precision reduces memory bandwidth:
+
+```python
+# High bandwidth: 32 bits per weight
+config_high_bw = {'Model': {'Precision': 'fixed<32,16>'}}
+
+# Medium bandwidth: 16 bits per weight (50% reduction)
+config_med_bw = {'Model': {'Precision': 'fixed<16,6>'}}
+
+# Low bandwidth: 8 bits per weight (75% reduction)
+config_low_bw = {'Model': {'Precision': 'fixed<8,3>'}}
+```
+
+### Latency Impact
+
+Precision affects pipeline depth:
+
+```python
+# Lower precision → fewer pipeline stages → lower latency
+config_fast = {'Model': {'Precision': 'fixed<12,4>'}}
+
+# Higher precision → more pipeline stages → higher latency
+config_accurate = {'Model': {'Precision': 'fixed<32,16>'}}
+```
+
+## Quantization-Aware Training
+
+### QKeras Integration
+
+hls4ml works seamlessly with QKeras for quantization-aware training:
+
+```python
+import qkeras
+import tensorflow as tf
+
+# Define quantized model
+model = tf.keras.Sequential([
+    qkeras.QDense(
+        64,
+        kernel_quantizer='quantized_bits(6,0,alpha=1)',
+        bias_quantizer='quantized_bits(6,0,alpha=1)',
+        input_shape=(16,)
+    ),
+    qkeras.QActivation('quantized_relu(6,0)'),
+    qkeras.QDense(
+        10,
+        kernel_quantizer='quantized_bits(6,0,alpha=1)',
+        bias_quantizer='quantized_bits(6,0,alpha=1)'
+    )
+])
+
+# Train with quantization
+model.compile(optimizer='adam', loss='categorical_crossentropy')
+model.fit(X_train, y_train, epochs=10)
+
+# Convert - precision extracted automatically
+config = hls4ml.utils.config_from_keras_model(model)
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model, hls_config=config
+)
+```
+
+### HGQ (HLS4ML Gradient Quantization)
+
+Advanced quantization with bit-width optimization:
+
+```python
+import HGQ
+
+# HGQ provides automatic bit-width selection
+# Precision is learned during training
+```
+
+## Debugging Precision Issues
+
+### Overflow Detection
+
+Check for overflows in simulation:
+
+```python
+import numpy as np
+
+# Test with wide range of inputs
+X_test = np.linspace(-10, 10, 1000).reshape(-1, 1)
+
+y_keras = model.predict(X_test)
+y_hls = hls_model.predict(X_test)
+
+# Large errors may indicate overflow
+errors = np.abs(y_keras - y_hls)
+if np.max(errors) > 1.0:
+    print("Possible overflow detected!")
+    print(f"Max error: {np.max(errors)}")
+```
+
+### Saturation Analysis
+
+Enable saturation to detect overflow:
+
+```python
+# Enable saturation to prevent wrapping
+config['LayerName']['dense_1'] = {
+    'Precision': 'fixed<16,6,RND,SAT>'
+}
+
+# If saturation improves results, you need more integer bits
+```
+
+### Layer-by-Layer Comparison
+
+Identify which layer has precision issues:
+
+```python
+import hls4ml
+from hls4ml.model import profiling
+
+# Profile provides layer-by-layer comparison
+hls_model.compile()
+profiling.numerical(keras_model, hls_model, X_test)
+
+# Check output - large differences indicate precision problems
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Start with default precision">
+    Begin with `fixed<16,6>` and adjust based on results. This provides a good balance for most models.
+  </Accordion>
+  
+  <Accordion title="Provide headroom for accumulation">
+    Accumulators should have more bits than inputs to prevent overflow:
+    ```python
+    config['LayerName']['dense_1'] = {
+        'Precision': {
+            'weight': 'fixed<8,4>',
+            'result': 'fixed<16,6>',
+            'accum': 'fixed<24,12>'  # Extra bits for accumulation
+        }
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Test with realistic data">
+    Use representative test data that covers the full input range to detect overflow and underflow.
+  </Accordion>
+  
+  <Accordion title="Consider activation functions">
+    Some activations need specific precision:
+    - Softmax: Needs higher precision for exp() function
+    - TanH: Needs more integer bits for range [-1, 1]
+    - Sigmoid: Similar to TanH
+  </Accordion>
+  
+  <Accordion title="Profile before synthesis">
+    Always profile in software simulation before running synthesis to catch precision issues early.
+  </Accordion>
+</AccordionGroup>
+
+## Precision Optimization Example
+
+Complete example of precision optimization workflow:
+
+```python
+import hls4ml
+import numpy as np
+import tensorflow as tf
+
+# 1. Create baseline model
+model = tf.keras.models.Sequential([
+    tf.keras.layers.Dense(64, activation='relu', input_shape=(16,)),
+    tf.keras.layers.Dense(32, activation='relu'),
+    tf.keras.layers.Dense(10, activation='softmax')
+])
+
+# 2. Start with conservative precision
+config = hls4ml.utils.config_from_keras_model(
+    model,
+    default_precision='fixed<16,6>'
+)
+
+# 3. Convert and test
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model, hls_config=config
+)
+hls_model.compile()
+
+X_test = np.random.rand(1000, 16)
+y_keras = model.predict(X_test)
+y_hls = hls_model.predict(X_test)
+
+baseline_mse = np.mean((y_keras - y_hls) ** 2)
+print(f"Baseline MSE: {baseline_mse}")
+
+# 4. Try reduced precision
+config_opt = hls4ml.utils.config_from_keras_model(
+    model,
+    default_precision='fixed<12,4>'
+)
+config_opt['LayerName']['dense_2'] = {'Precision': 'fixed<16,6>'}  # Keep one layer high
+
+hls_model_opt = hls4ml.converters.convert_from_keras_model(
+    model, hls_config=config_opt
+)
+hls_model_opt.compile()
+
+y_hls_opt = hls_model_opt.predict(X_test)
+optimized_mse = np.mean((y_keras - y_hls_opt) ** 2)
+print(f"Optimized MSE: {optimized_mse}")
+
+# 5. If acceptable, build and check resources
+if optimized_mse < 0.01:
+    hls_model_opt.build(csim=True, synth=True)
+    # Check report for resource usage
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Model Conversion" icon="arrows-rotate" href="./model-conversion">
+    Learn more about model conversion options
+  </Card>
+  
+  <Card title="HLS Backends" icon="microchip" href="./hls-backends">
+    Understand backend-specific features
+  </Card>
+</CardGroup>

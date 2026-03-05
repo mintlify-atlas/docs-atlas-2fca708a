@@ -1,0 +1,533 @@
+---
+title: Backend Plugins
+description: Extend hls4ml with custom backends and hardware targets
+---
+
+hls4ml supports a plugin system that allows external packages to register custom backends and writers. This enables specialized hardware targets and synthesis flows to integrate seamlessly with the core hls4ml infrastructure.
+
+## Overview
+
+The plugin system enables:
+
+- **External backends** living in separate packages
+- **Independent versioning** from core hls4ml
+- **Reuse of conversion infrastructure** while customizing synthesis
+- **Custom hardware targets** (e.g., AMD AIE, custom ASICs)
+
+<Info>
+  Plugins are automatically discovered and loaded when `hls4ml.backends` is imported.
+</Info>
+
+## Plugin Discovery
+
+Plugins are discovered through two mechanisms:
+
+### 1. Python Entry Points
+
+Packages advertise themselves via the `hls4ml.backends` entry point group:
+
+```toml
+# pyproject.toml
+[project.entry-points."hls4ml.backends"]
+AIE = "aie4ml.plugin:register"
+```
+
+When hls4ml imports backends, it automatically scans for and loads these entry points.
+
+### 2. Environment Variable
+
+Modules listed in `HLS4ML_BACKEND_PLUGINS` are also loaded:
+
+```bash
+# Linux/macOS (colon-separated)
+export HLS4ML_BACKEND_PLUGINS=aie4ml.plugin:custom_backend.hls4ml_backend
+
+# Windows (semicolon-separated)
+set HLS4ML_BACKEND_PLUGINS=aie4ml.plugin;custom_backend.hls4ml_backend
+```
+
+<Tabs>
+  <Tab title="Linux/macOS">
+    ```bash
+    export HLS4ML_BACKEND_PLUGINS=aie4ml.plugin:another_pkg.hls4ml_backend
+    ```
+    
+    Use `:` to separate multiple modules.
+  </Tab>
+  
+  <Tab title="Windows">
+    ```cmd
+    set HLS4ML_BACKEND_PLUGINS=aie4ml.plugin;another_pkg.hls4ml_backend
+    ```
+    
+    Use `;` to separate multiple modules.
+  </Tab>
+</Tabs>
+
+## Creating a Plugin
+
+### Minimal Plugin Structure
+
+A complete plugin requires:
+
+1. A backend class
+2. A writer class  
+3. A registration function
+4. Entry point configuration
+
+<Steps>
+  <Step title="Define Backend Class">
+    ```python
+    # aie4ml/aie_backend.py
+    from hls4ml.backends.backend import Backend
+    
+    class AIEBackend(Backend):
+        def __init__(self):
+            super().__init__('AIE')
+            self.register_passes()
+        
+        def register_passes(self):
+            # Register backend-specific optimizer passes
+            pass
+        
+        def create_initial_config(self, **kwargs):
+            # Return default configuration
+            return {
+                'IOType': 'io_parallel',
+                'HLSConfig': {}
+            }
+    ```
+  </Step>
+  
+  <Step title="Define Writer Class">
+    ```python
+    # aie4ml/writer.py
+    from hls4ml.writer.writers import Writer
+    
+    class AIEWriter(Writer):
+        def __init__(self):
+            super().__init__(AIEBackend)
+        
+        def write_project_dir(self, model):
+            # Generate project files
+            pass
+        
+        def write_project_cpp(self, model):
+            # Generate C++ source files
+            pass
+        
+        def write_project_header(self, model):
+            # Generate header files  
+            pass
+    ```
+  </Step>
+  
+  <Step title="Create Registration Function">
+    ```python
+    # aie4ml/plugin.py
+    from aie4ml.aie_backend import AIEBackend
+    from aie4ml.writer import AIEWriter
+    
+    def register(*, register_backend, register_writer):
+        """Register AIE backend and writer with hls4ml."""
+        register_writer('AIE', AIEWriter)
+        register_backend('AIE', AIEBackend)
+    ```
+  </Step>
+  
+  <Step title="Configure Entry Point">
+    ```toml
+    # pyproject.toml
+    [project]
+    name = "aie4ml"
+    version = "0.1.0"
+    dependencies = ["hls4ml>=0.8.0"]
+    
+    [project.entry-points."hls4ml.backends"]
+    AIE = "aie4ml.plugin:register"
+    ```
+  </Step>
+</Steps>
+
+### Complete Plugin Example
+
+Here's a full example for a custom ASIC backend:
+
+```python
+# custom_asic/backend.py
+from hls4ml.backends.backend import Backend
+from hls4ml.backends.template import FunctionCallTemplate, LayerConfigTemplate
+
+class ASICBackend(Backend):
+    def __init__(self):
+        super().__init__('ASIC')
+        self.register_passes()
+        self.register_templates()
+    
+    def register_passes(self):
+        # Register optimization passes
+        from custom_asic.passes import CustomOptimizationPass
+        self.register_pass('custom_opt', CustomOptimizationPass)
+    
+    def register_templates(self):
+        # Register layer templates
+        dense_config = LayerConfigTemplate('Dense')
+        dense_config.set_template('dense_config.cpp')
+        
+        dense_function = FunctionCallTemplate('Dense')
+        dense_function.set_template('dense_function.cpp')
+        
+        self.register_template(dense_config)
+        self.register_template(dense_function)
+    
+    def create_initial_config(self, **kwargs):
+        config = {
+            'IOType': 'io_parallel',
+            'ClockPeriod': kwargs.get('clock_period', 5),
+            'ASICTechnology': kwargs.get('technology', '7nm'),
+            'HLSConfig': {
+                'Model': {
+                    'Precision': 'fixed<16,6>',
+                    'ReuseFactor': 1
+                }
+            }
+        }
+        return config
+
+# custom_asic/writer.py
+from hls4ml.writer.writers import Writer
+import os
+
+class ASICWriter(Writer):
+    def __init__(self):
+        from custom_asic.backend import ASICBackend
+        super().__init__(ASICBackend)
+    
+    def write_project_dir(self, model):
+        os.makedirs(model.config.get_output_dir(), exist_ok=True)
+        os.makedirs(f"{model.config.get_output_dir()}/src", exist_ok=True)
+        os.makedirs(f"{model.config.get_output_dir()}/include", exist_ok=True)
+    
+    def write_project_cpp(self, model):
+        # Generate main C++ implementation
+        cpp_code = self.generate_cpp(model)
+        with open(f"{model.config.get_output_dir()}/src/{model.config.get_project_name()}.cpp", 'w') as f:
+            f.write(cpp_code)
+    
+    def write_project_header(self, model):
+        # Generate header file
+        header_code = self.generate_header(model)
+        with open(f"{model.config.get_output_dir()}/include/{model.config.get_project_name()}.h", 'w') as f:
+            f.write(header_code)
+    
+    def generate_cpp(self, model):
+        # Template-based code generation
+        return f"""
+        #include "{model.config.get_project_name()}.h"
+        
+        void {model.config.get_project_name()}(
+            input_t input[{model.get_input_variables()[0].size()}],
+            output_t output[{model.get_output_variables()[0].size()}]
+        ) {{
+            // Generated implementation
+        }}
+        """
+    
+    def generate_header(self, model):
+        return f"""
+        #ifndef {model.config.get_project_name().upper()}_H_
+        #define {model.config.get_project_name().upper()}_H_
+        
+        typedef fixed<16,6> input_t;
+        typedef fixed<16,6> output_t;
+        
+        void {model.config.get_project_name()}(
+            input_t input[],
+            output_t output[]
+        );
+        
+        #endif
+        """
+
+# custom_asic/plugin.py
+from custom_asic.backend import ASICBackend
+from custom_asic.writer import ASICWriter
+
+def register(*, register_backend, register_writer):
+    """Register custom ASIC backend."""
+    register_writer('ASIC', ASICWriter)
+    register_backend('ASIC', ASICBackend)
+```
+
+## Using a Plugin
+
+Once installed, plugins are used like built-in backends:
+
+```python
+import hls4ml
+from tensorflow.keras.models import Sequential, Dense
+
+# Build model
+model = Sequential([Dense(64, input_shape=(16,))])
+
+# Check available backends (plugin appears here)
+print(hls4ml.backends.get_available_backends())
+# Output: ['Vivado', 'Vitis', 'Quartus', 'Catapult', 'AIE', 'ASIC']
+
+# Use plugin backend
+config = hls4ml.utils.config_from_keras_model(model)
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='custom_asic_project',
+    backend='ASIC',  # Your plugin backend
+    technology='7nm'
+)
+
+hls_model.write()
+```
+
+## Packaging Data Files
+
+Backends often need template files and configurations:
+
+```python
+# pyproject.toml
+[project]
+name = "aie4ml"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+aie4ml = [
+    "templates/*.cpp",
+    "templates/*.h",
+    "configs/*.json"
+]
+```
+
+Access packaged data in code:
+
+```python
+import importlib.resources as resources
+
+def load_template(name):
+    with resources.files('aie4ml.templates').joinpath(name).open('r') as f:
+        return f.read()
+
+template = load_template('dense.cpp')
+```
+
+## Advanced Plugin Features
+
+### Custom Optimizer Passes
+
+```python
+# custom_asic/passes/power_optimization.py
+from hls4ml.model.optimizer import OptimizerPass
+
+class PowerOptimization(OptimizerPass):
+    def match(self, node):
+        # Determine if optimization applies
+        return node.class_name in ['Dense', 'Conv2D']
+    
+    def transform(self, model, node):
+        # Apply power-aware optimizations
+        node.set_attr('clock_gating', True)
+        node.set_attr('power_mode', 'low')
+        return True
+
+# Register in backend
+class ASICBackend(Backend):
+    def register_passes(self):
+        from custom_asic.passes import PowerOptimization
+        self.register_pass('power_opt', PowerOptimization)
+```
+
+### Custom Templates
+
+```cpp
+// templates/dense_optimized.cpp
+#include "parameters.h"
+
+void dense_{{layer_name}}(
+    {{input_type}} data[{{n_in}}],
+    {{output_type}} res[{{n_out}}],
+    {{weight_type}} weights[{{n_in}}][{{n_out}}],
+    {{bias_type}} biases[{{n_out}}]
+) {
+    #pragma HLS PIPELINE II={{interval}}
+    #pragma HLS ARRAY_PARTITION variable=weights cyclic factor={{reuse}}
+    
+    for (int i = 0; i < {{n_out}}; i++) {
+        {{accum_type}} acc = biases[i];
+        for (int j = 0; j < {{n_in}}; j++) {
+            acc += data[j] * weights[j][i];
+        }
+        res[i] = acc;
+    }
+}
+```
+
+### Custom Layer Support
+
+```python
+from hls4ml.model.layers import Layer
+
+class CustomAttention(Layer):
+    def initialize(self):
+        # Define layer attributes
+        self.add_attribute('n_heads', 8)
+        self.add_attribute('d_model', 512)
+        
+    def add_weights(self, model):
+        # Define weight tensors
+        q_shape = (self.attributes['d_model'], self.attributes['d_model'])
+        self.add_weight('query_weights', q_shape)
+        
+# Register with backend
+backend.register_layer('Attention', CustomAttention)
+```
+
+## Testing Your Plugin
+
+```python
+# tests/test_plugin.py
+import pytest
+import hls4ml
+import numpy as np
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+
+def test_backend_available():
+    backends = hls4ml.backends.get_available_backends()
+    assert 'ASIC' in backends
+
+def test_conversion():
+    model = Sequential([Dense(10, input_shape=(5,))])
+    
+    config = hls4ml.utils.config_from_keras_model(model)
+    hls_model = hls4ml.converters.convert_from_keras_model(
+        model,
+        hls_config=config,
+        backend='ASIC',
+        output_dir='test_asic'
+    )
+    
+    assert hls_model is not None
+    assert hls_model.config.backend.name == 'ASIC'
+
+def test_prediction():
+    model = Sequential([Dense(10, input_shape=(5,), activation='relu')])
+    
+    hls_model = hls4ml.converters.convert_from_keras_model(
+        model,
+        backend='ASIC',
+        output_dir='test_asic_pred'
+    )
+    
+    X_test = np.random.randn(100, 5).astype(np.float32)
+    
+    keras_pred = model.predict(X_test)
+    hls_pred = hls_model.predict(X_test)
+    
+    np.testing.assert_allclose(keras_pred, hls_pred, rtol=0.1)
+```
+
+## Example: AMD AIE Plugin
+
+The `aie4ml` package demonstrates a complete plugin implementation:
+
+```bash
+# Install the AIE plugin
+pip install aie4ml
+```
+
+```python
+import hls4ml
+
+# AIE backend is now available
+backends = hls4ml.backends.get_available_backends()
+print('AIE' in backends)  # True
+
+# Use AIE backend
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    backend='AIE',
+    output_dir='aie_project'
+)
+```
+
+<Card title="AIE4ML Repository" icon="github" href="https://github.com/dimdano/aie4ml">
+  Complete reference implementation of an external hls4ml backend plugin.
+</Card>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use semantic versioning">
+    Version your plugin independently from hls4ml. Use semver and specify compatible hls4ml versions in dependencies.
+  </Accordion>
+  
+  <Accordion title="Provide comprehensive tests">
+    Test conversion, code generation, and numerical accuracy. Include tests for all supported layer types.
+  </Accordion>
+  
+  <Accordion title="Document backend-specific features">
+    Clearly document what makes your backend special: supported operations, hardware requirements, performance characteristics.
+  </Accordion>
+  
+  <Accordion title="Reuse core infrastructure">
+    Leverage hls4ml's conversion, optimization, and profiling infrastructure. Don't reimplement what already exists.
+  </Accordion>
+  
+  <Accordion title="Handle errors gracefully">
+    Provide clear error messages when operations are unsupported or configuration is invalid.
+  </Accordion>
+</AccordionGroup>
+
+## API Reference
+
+### Backend Class
+
+```python
+class hls4ml.backends.backend.Backend:
+    def __init__(self, name: str)
+    def register_pass(self, name: str, pass_class: type)
+    def register_template(self, template: Template)
+    def create_initial_config(self, **kwargs) -> dict
+```
+
+### Writer Class
+
+```python
+class hls4ml.writer.writers.Writer:
+    def __init__(self, backend_class: type)
+    def write_project_dir(self, model: ModelGraph)
+    def write_project_cpp(self, model: ModelGraph)
+    def write_project_header(self, model: ModelGraph)
+```
+
+### Registration Functions
+
+```python
+def register(*, register_backend, register_writer):
+    """
+    Plugin entry point.
+    
+    Args:
+        register_backend: Callable to register backend
+        register_writer: Callable to register writer
+    """
+    register_writer('BackendName', WriterClass)
+    register_backend('BackendName', BackendClass)
+```
+
+### Environment Variable
+
+```bash
+HLS4ML_BACKEND_PLUGINS=module1.plugin:module2.plugin
+```
+
+Colon-separated (Linux/macOS) or semicolon-separated (Windows) list of module paths.

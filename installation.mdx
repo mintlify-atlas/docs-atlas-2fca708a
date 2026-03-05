@@ -1,0 +1,463 @@
+---
+title: 'Installation'
+description: 'Complete installation guide for hls4ml and its dependencies'
+---
+
+## Requirements
+
+hls4ml requires Python 3.10 or later and is compatible with Linux and macOS.
+
+<Note>
+Windows is not officially supported, but may work using WSL (Windows Subsystem for Linux).
+</Note>
+
+## Basic Installation
+
+The simplest way to install hls4ml is using pip:
+
+```bash
+pip install hls4ml
+```
+
+This installs the core package with minimal dependencies:
+- `h5py` - HDF5 file format support
+- `numpy` - Numerical computing
+- `pyyaml` - YAML configuration files
+- `pydigitalwavetools` - Waveform handling
+- `quantizers` - Quantization utilities
+
+<Warning>
+**Do not use conda-forge!** Previously available conda packages are outdated and unsupported. Only pip installation is currently maintained.
+</Warning>
+
+## Development Version
+
+hls4ml evolves rapidly with new features and bug fixes on the development branch:
+
+```bash
+pip install git+https://github.com/fastmachinelearning/hls4ml@main
+```
+
+<Note>
+The development version may have experimental features that are not yet stable. Use for testing new functionality or bug fixes not yet in a release.
+</Note>
+
+## Optional Dependencies
+
+hls4ml uses optional dependency groups for specific features. Install only what you need:
+
+<AccordionGroup>
+  <Accordion title="Profiling & Visualization" icon="chart-bar">
+    Tools for analyzing model weights, activations, and finding optimal precisions:
+    
+    ```bash
+    pip install hls4ml[profiling]
+    ```
+    
+    **Includes:** `matplotlib`, `pandas`, `seaborn`
+    
+    **Use case:** Generate distribution plots for weights and activations to optimize bit widths
+    
+    ```python
+    from hls4ml.model.profiling import numerical
+    plots = numerical(model=keras_model, hls_model=hls_model, X=test_data)
+    ```
+  </Accordion>
+
+  <Accordion title="Keras v3 Frontend" icon="cube">
+    Support for Keras 3.x (multi-backend Keras):
+    
+    ```bash
+    pip install hls4ml[keras-v3]
+    ```
+    
+    **Includes:** `keras>=3.10`
+    
+    <Warning>
+    Keras v2 and v3 cannot coexist in the same Python environment. If you need both, use separate virtual environments.
+    </Warning>
+    
+    **Use case:** Convert models trained with Keras 3.x (TensorFlow, JAX, or PyTorch backend)
+  </Accordion>
+
+  <Accordion title="QKeras Quantization" icon="compress">
+    Quantization-aware training with QKeras (Keras v2):
+    
+    ```bash
+    pip install hls4ml[qkeras]
+    ```
+    
+    **Includes:** `qkeras`, `tensorflow>=2.8,<=2.14.1`, `tensorflow-model-optimization<=0.7.5`
+    
+    **Use case:** Train quantized models with QKeras for better FPGA resource efficiency
+    
+    ```python
+    from qkeras import QDense, QActivation
+    # Use quantized layers in your model
+    ```
+  </Accordion>
+
+  <Accordion title="HGQ Quantization" icon="compress">
+    Heterogeneous Quantization with gradient-based bit-width optimization:
+    
+    **HGQ (Keras v2):**
+    ```bash
+    pip install hls4ml[hgq]
+    ```
+    **Includes:** `hgq>=0.2.3`
+    
+    **HGQ2 (Keras v3):**
+    ```bash
+    pip install hls4ml[hgq2]
+    ```
+    **Includes:** `hgq2>=0.0.1`
+    
+    <Warning>
+    Cannot install both `hgq` and `hgq2` simultaneously due to Keras version conflicts.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="ONNX Frontend" icon="diagram-project">
+    Support for ONNX model format:
+    
+    ```bash
+    pip install hls4ml[onnx]
+    ```
+    
+    **Includes:** `onnx>=1.4`
+    
+    **Use case:** Convert models from PyTorch, TensorFlow, or any framework supporting ONNX export
+  </Accordion>
+
+  <Accordion title="Model Optimization" icon="screwdriver-wrench">
+    DSP-aware pruning and hyperparameter optimization:
+    
+    ```bash
+    pip install hls4ml[optimization]
+    ```
+    
+    **Includes:** `keras-tuner==1.1.3`, `ortools==9.4.1874`, `packaging`
+    
+    **Use case:** Automatically find optimal precision and reuse factor configurations
+  </Accordion>
+
+  <Accordion title="Distributed Arithmetic" icon="calculator">
+    Enable distributed arithmetic for efficient computation:
+    
+    ```bash
+    pip install hls4ml[da]
+    ```
+    
+    **Includes:** `da4ml>=0.5.2,<0.6`
+    
+    **Use case:** Alternative computation method that can reduce DSP usage
+  </Accordion>
+
+  <Accordion title="Symbolic Regression" icon="function">
+    Symbolic regression for activation function approximation:
+    
+    ```bash
+    pip install hls4ml[sr]
+    ```
+    
+    **Includes:** `sympy>=1.13.1`
+    
+    **Use case:** Find mathematical expressions to approximate complex activation functions
+  </Accordion>
+
+  <Accordion title="Quartus Report Parsing" icon="file-lines">
+    Parse Intel Quartus synthesis reports:
+    
+    ```bash
+    pip install hls4ml[quartus-report]
+    ```
+    
+    **Includes:** `calmjs-parse`, `tabulate`
+    
+    **Use case:** Extract resource usage from Quartus reports when using Intel FPGAs
+  </Accordion>
+</AccordionGroup>
+
+### Installing Multiple Options
+
+You can install multiple optional dependencies at once:
+
+```bash
+# Profiling + ONNX support
+pip install hls4ml[profiling,onnx]
+
+# Keras v3 + HGQ2 + optimization
+pip install hls4ml[keras-v3,hgq2,optimization]
+```
+
+<Warning>
+**Conflicting dependencies:**
+
+These combinations will NOT work:
+- `qkeras` + `hgq2` (Keras v2 vs v3)
+- `keras-v3` + `qkeras` (Keras v3 vs v2)
+- `hgq` + `hgq2` (Keras v2 vs v3)
+
+Use separate virtual environments if you need both Keras v2 and v3 workflows.
+</Warning>
+
+## HLS Tool Installation
+
+To synthesize FPGA designs (not just C simulation), you need vendor HLS tools:
+
+<Tabs>
+  <Tab title="Xilinx/AMD FPGAs">
+    ### Vivado Backend
+    
+    **Vivado HLS 2020.1** or later recommended
+    
+    ```bash
+    # Download from AMD/Xilinx website
+    # After installation, source the settings:
+    source /tools/Xilinx/Vivado/2020.1/settings64.sh
+    ```
+    
+    ### Vitis Backend
+    
+    **Vitis HLS 2022.2** or later required
+    
+    ```bash
+    # Download Vitis from AMD/Xilinx website  
+    # Source the settings:
+    source /tools/Xilinx/Vitis/2022.2/settings64.sh
+    ```
+    
+    <Note>
+    Vitis backend is recommended over Vivado for new projects. It supports newer devices and has improved optimization.
+    </Note>
+  </Tab>
+  
+  <Tab title="Intel/Altera FPGAs">
+    ### Quartus Backend
+    
+    **Intel Quartus 20.1 to 21.4**
+    
+    ```bash
+    # Download from Intel website
+    # Add to PATH:
+    export PATH=$PATH:/path/to/quartus/bin
+    ```
+    
+    ### oneAPI Backend
+    
+    **oneAPI 2024.1 to 2025.0** with FPGA compiler
+    
+    ```bash
+    # Install oneAPI base toolkit and FPGA add-on
+    # Source the environment:
+    source /opt/intel/oneapi/setvars.sh
+    ```
+    
+    <Warning>
+    oneAPI 2025.1+ removed FPGA support and will NOT work with hls4ml. Use 2025.0 or earlier.
+    </Warning>
+  </Tab>
+  
+  <Tab title="ASICs & Universal">
+    ### Catapult HLS
+    
+    **Catapult HLS 2024.1_1** or **2024.2**
+    
+    Supports both ASIC and FPGA targets.
+    
+    ```bash
+    # Install from Siemens EDA
+    # Configure license and environment per vendor instructions
+    ```
+  </Tab>
+</Tabs>
+
+## C/C++ Compiler Requirements
+
+For C simulation (running `hls_model.compile()` and `hls_model.predict()`), you need:
+
+### Linux
+```bash
+# Most distributions include g++, verify with:
+g++ --version
+
+# If not installed:
+sudo apt-get install g++  # Debian/Ubuntu
+sudo yum install gcc-c++   # RHEL/CentOS
+```
+
+### macOS
+```bash
+# Install Xcode command line tools:
+xcode-select --install
+
+# If clang-based g++ has issues with ap_types, install GCC:
+brew install gcc
+```
+
+### oneAPI Backend
+
+For oneAPI backend, C/SYCL simulation requires:
+
+```bash
+# Install oneAPI compiler
+source /opt/intel/oneapi/setvars.sh
+
+# oneAPI 2025.0 required (2025.1 is known not to work)
+```
+
+## Verification
+
+Verify your installation:
+
+```python
+import hls4ml
+print(f"hls4ml version: {hls4ml.__version__}")
+
+# Check available converters
+from hls4ml import converters
+print("Converters loaded successfully")
+
+# Test basic functionality
+import numpy as np
+from keras.models import Sequential
+from keras.layers import Dense
+
+model = Sequential([Dense(10, input_shape=(5,))])
+config = hls4ml.utils.config_from_keras_model(model)
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model, hls_config=config, backend='Vivado'
+)
+print("✓ Installation successful!")
+```
+
+## Python Version Support
+
+hls4ml officially supports:
+
+- Python 3.10
+- Python 3.11  
+- Python 3.12
+- Python 3.13
+- Python 3.14
+
+<Note>
+Older Python versions (3.9 and below) are not supported as of hls4ml 1.1.0+.
+</Note>
+
+## Virtual Environments
+
+We strongly recommend using virtual environments:
+
+<CodeGroup>
+
+```bash venv
+# Create virtual environment
+python -m venv hls4ml-env
+
+# Activate (Linux/macOS)
+source hls4ml-env/bin/activate
+
+# Activate (Windows)
+hls4ml-env\Scripts\activate
+
+# Install hls4ml
+pip install hls4ml[profiling,onnx]
+```
+
+```bash conda
+# Create conda environment
+conda create -n hls4ml-env python=3.11
+conda activate hls4ml-env
+
+# Install hls4ml with pip (not conda!)
+pip install hls4ml[profiling,onnx]
+```
+
+</CodeGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="ImportError: No module named 'tensorflow'">
+    TensorFlow is optional - only install if using Keras v2:
+    
+    ```bash
+    pip install tensorflow>=2.8,<=2.14.1
+    ```
+  </Accordion>
+  
+  <Accordion title="ModuleNotFoundError: No module named 'torch'">
+    PyTorch is optional - only install if converting PyTorch models:
+    
+    ```bash
+    # Follow instructions at pytorch.org for your system
+    pip install torch torchvision
+    ```
+  </Accordion>
+  
+  <Accordion title="Version conflicts between Keras v2 and v3">
+    Cannot have both installed. Create separate environments:
+    
+    ```bash
+    # Environment 1: Keras v2
+    python -m venv keras2-env
+    source keras2-env/bin/activate
+    pip install hls4ml[qkeras]
+    
+    # Environment 2: Keras v3
+    python -m venv keras3-env
+    source keras3-env/bin/activate
+    pip install hls4ml[keras-v3,hgq2]
+    ```
+  </Accordion>
+  
+  <Accordion title="HLS tools not found during build()">
+    Ensure HLS tools are in your PATH:
+    
+    ```bash
+    # Check Vivado HLS
+    which vivado_hls
+    
+    # Check Vitis HLS
+    which vitis_hls
+    
+    # If not found, source the settings file:
+    source /tools/Xilinx/Vivado/2020.1/settings64.sh
+    ```
+  </Accordion>
+  
+  <Accordion title="Compilation errors with ap_types.h on macOS">
+    The system clang may not work with Xilinx headers. Install GCC:
+    
+    ```bash
+    brew install gcc
+    
+    # Set compiler explicitly
+    export CXX=g++-11  # adjust version number
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Uninstalling
+
+To remove hls4ml:
+
+```bash
+pip uninstall hls4ml
+
+# Also remove cache
+rm -rf ~/.hls4ml
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first FPGA inference model
+  </Card>
+  
+  <Card title="Tutorials" icon="graduation-cap" href="https://github.com/fastmachinelearning/hls4ml-tutorial">
+    Hands-on Jupyter notebooks
+  </Card>
+</CardGroup>

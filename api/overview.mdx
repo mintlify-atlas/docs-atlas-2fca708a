@@ -1,0 +1,140 @@
+---
+title: 'API Overview'
+description: 'Complete API reference for hls4ml'
+---
+
+## Overview
+
+The hls4ml API provides tools for converting machine learning models to FPGA firmware. This reference covers all major modules and functions.
+
+## Main Modules
+
+<CardGroup cols={2}>
+  <Card title="Converters" icon="arrow-right-arrow-left" href="/api/converters/keras">
+    Convert models from Keras, PyTorch, and ONNX
+  </Card>
+  <Card title="Model" icon="diagram-project" href="/api/model/model">
+    Core model graph and layer management
+  </Card>
+  <Card title="Backends" icon="microchip" href="/api/backends/backend">
+    FPGA backend implementations
+  </Card>
+  <Card title="Utils" icon="wrench" href="/api/utils/config">
+    Configuration and utility functions
+  </Card>
+</CardGroup>
+
+## Quick Start
+
+Here's a basic example of converting a Keras model:
+
+```python
+import hls4ml
+
+# Create configuration
+config = hls4ml.utils.config.create_config(
+    output_dir='my-hls-test',
+    project_name='myproject',
+    backend='Vivado'
+)
+
+# Convert Keras model
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    output_dir='my-hls-test',
+    project_name='myproject',
+    backend='Vivado'
+)
+
+# Compile and predict
+hls_model.compile()
+predictions = hls_model.predict(test_data)
+```
+
+## Core Functions
+
+### Model Conversion
+
+- `convert_from_keras_model()` - Convert Keras models
+- `convert_from_pytorch_model()` - Convert PyTorch models
+- `convert_from_onnx_model()` - Convert ONNX models
+- `convert_from_config()` - Convert from YAML configuration
+
+### Configuration
+
+- `create_config()` - Create backend configuration
+- `config_from_keras_model()` - Generate config from Keras model
+- `config_from_pytorch_model()` - Generate config from PyTorch model
+- `config_from_onnx_model()` - Generate config from ONNX model
+
+### Model Operations
+
+- `model.compile()` - Compile the generated project
+- `model.predict()` - Run inference
+- `model.build()` - Synthesize with HLS tools
+- `model.write()` - Write project to disk
+
+## Module Structure
+
+```
+hls4ml/
+├── converters/          # Model conversion modules
+│   ├── keras/          # Keras converters
+│   ├── pytorch/        # PyTorch converters
+│   └── onnx/           # ONNX converters
+├── model/              # Model graph representation
+│   ├── graph.py        # ModelGraph class
+│   └── optimizer/      # Optimization passes
+├── backends/           # FPGA backends
+│   ├── vivado/         # Xilinx Vivado backend
+│   ├── vitis/          # Xilinx Vitis backend
+│   └── quartus/        # Intel Quartus backend
+└── utils/              # Utilities
+    ├── config.py       # Configuration helpers
+    └── report.py       # Report parsing
+```
+
+## Architecture
+
+### Conversion Flow
+
+1. **Parse** - Extract model architecture and weights
+2. **Transform** - Convert to internal representation (ModelGraph)
+3. **Optimize** - Apply optimization passes
+4. **Generate** - Produce HLS C++ code
+5. **Build** - Synthesize with backend tools
+
+### ModelGraph
+
+The `ModelGraph` is the central data structure representing your model:
+
+- Stores layers as nodes in a directed graph
+- Manages data flow between layers
+- Applies optimization transformations
+- Generates backend-specific code
+
+## Type System
+
+hls4ml uses a sophisticated type system for precision:
+
+- `FixedPrecisionType` - Fixed-point types (e.g., `ap_fixed<16,6>`)
+- `IntegerPrecisionType` - Integer types (e.g., `ap_int<8>`)
+- `FloatPrecisionType` - Floating-point types
+- `UnspecifiedPrecisionType` - Auto-inferred precision
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Keras Conversion" icon="k" href="/api/converters/keras">
+    Learn about Keras model conversion
+  </Card>
+  <Card title="PyTorch Conversion" icon="fire" href="/api/converters/pytorch">
+    Learn about PyTorch model conversion
+  </Card>
+  <Card title="Model API" icon="sitemap" href="/api/model/model">
+    Explore the ModelGraph API
+  </Card>
+  <Card title="Configuration" icon="gear" href="/api/utils/config">
+    Configure your conversion
+  </Card>
+</CardGroup>

@@ -1,80 +1,387 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get started with hls4ml in minutes - from installation to your first FPGA model
 ---
 
-## Get started in three steps
+Get up and running with hls4ml in under 5 minutes. This guide walks you through installing hls4ml, converting your first neural network model to FPGA firmware, and running synthesis.
 
-Get your documentation site running locally and make your first customization.
+<Steps>
+  <Step title="Install hls4ml">
+    Install hls4ml using pip:
 
-### Step 1: Set up your local environment
+    ```bash
+    pip install hls4ml
+    ```
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    For profiling capabilities, install with the profiling extra:
 
-### Step 2: Deploy your changes
+    ```bash
+    pip install hls4ml[profiling]
+    ```
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    <Note>
+      hls4ml supports Python 3.8+. You'll need an HLS tool (Vivado HLS, Vitis HLS, Quartus, etc.) installed for synthesis, but you can explore conversion without it.
+    </Note>
+  </Step>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+  <Step title="Fetch an Example Model">
+    hls4ml provides a collection of example models to get you started quickly. Let's fetch a simple 3-layer Keras model:
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```python
+    import hls4ml
 
-### Step 3: Go live
+    # Fetch an example model from the hls4ml repository
+    # This downloads the model and returns a configuration
+    config = hls4ml.utils.fetch_example_model('KERAS_3layer.json')
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    # The configuration contains all settings for conversion
+    print(config)
+    ```
 
-## Next steps
+    This downloads:
+    - `KERAS_3layer.json` - Model architecture
+    - `KERAS_3layer_weights.h5` - Trained weights
+    - `KERAS_3layer_config.yml` - Conversion configuration (if available)
+    - Example input/output data for testing
 
-Now that you have your docs running, explore these key features:
+    <Accordion title="Browse Available Example Models">
+      See all available example models:
+
+      ```python
+      hls4ml.utils.fetch_example_list()
+      ```
+
+      This prints a list of all available models including Keras, PyTorch, ONNX, and TensorFlow formats.
+    </Accordion>
+  </Step>
+
+  <Step title="Convert to HLS">
+    Now convert the Keras model to HLS firmware:
+
+    ```python
+    # Convert the model to HLS
+    hls_model = hls4ml.converters.keras_v2_to_hls(config)
+
+    # The hls_model is a ModelGraph object representing your neural network
+    # in the hls4ml intermediate representation
+    print(hls_model)
+    ```
+
+    <Accordion title="Convert Your Own Model">
+      To convert your own Keras model instead:
+
+      ```python
+      from tensorflow import keras
+
+      # Load your trained Keras model
+      model = keras.models.load_model('my_model.h5')
+
+      # Convert with minimal configuration
+      hls_model = hls4ml.converters.convert_from_keras_model(
+          model,
+          output_dir='my-hls-test',
+          project_name='myproject',
+          backend='Vivado',
+          hls_config={
+              'Model': {
+                  'Precision': 'ap_fixed<16,6>',
+                  'ReuseFactor': 1
+              }
+          }
+      )
+      ```
+
+      See the [Keras Frontend](/frontends/keras) guide for more options.
+    </Accordion>
+  </Step>
+
+  <Step title="Build the HLS Project">
+    Synthesize the model using your HLS tool. This example uses Vivado HLS:
+
+    ```python
+    # Run HLS synthesis
+    # This generates the C++ code, runs synthesis, and creates reports
+    hls_model.build()
+    ```
+
+    <Warning>
+      This step requires Vivado HLS or Vitis HLS installed and available in your PATH. Synthesis can take several minutes depending on your model size and complexity.
+    </Warning>
+
+    The build process:
+    1. Generates optimized C++ firmware code
+    2. Runs C simulation (csim) to verify correctness
+    3. Performs HLS synthesis to generate RTL
+    4. Produces resource utilization and timing reports
+
+    <Accordion title="Build Options">
+      Control which stages of the build to run:
+
+      ```python
+      # Just compile (no synthesis)
+      hls_model.compile()
+
+      # Full build with co-simulation
+      hls_model.build(csim=True, synth=True, cosim=True)
+
+      # Use a different backend
+      hls_model.build(backend='Vitis')
+      ```
+    </Accordion>
+  </Step>
+
+  <Step title="View Results">
+    After synthesis completes, examine the reports to understand resource usage and performance:
+
+    ```python
+    # Read and print the synthesis report
+    hls4ml.report.read_vivado_report('my-hls-test')
+    ```
+
+    The report shows:
+    - **Latency**: Clock cycles required for inference
+    - **Interval**: Throughput (how often you can process new inputs)
+    - **Resource Usage**: DSPs, BRAMs, LUTs, and FFs consumed
+    - **Clock Period**: Achieved timing
+
+    <CodeGroup>
+      ```python Python API
+      # Parse the report into a dictionary
+      from hls4ml.report import parse_vivado_report
+      
+      report = parse_vivado_report('my-hls-test')
+      print(f"Latency: {report['LatencyBest']} cycles")
+      print(f"Interval: {report['IntervalBest']} cycles")
+      print(f"DSPs: {report['DSP']}")
+      ```
+
+      ```bash CLI
+      # View reports from the command line
+      hls4ml report my-hls-test
+      ```
+    </CodeGroup>
+
+    <Accordion title="Understanding the Report">
+      Key metrics in the synthesis report:
+
+      - **Latency**: Total time (in clock cycles) from input to output. Lower is better for real-time applications.
+      - **Interval (II)**: Initiation interval - how many cycles between processing consecutive inputs. II=1 means full throughput.
+      - **DSPs**: Digital signal processing blocks used for multiplication/accumulation.
+      - **BRAMs**: Block RAM used for weights and intermediate values.
+      - **LUTs**: Look-up tables for logic implementation.
+      - **FFs**: Flip-flops for registers.
+    </Accordion>
+  </Step>
+
+  <Step title="Test Your Model">
+    Verify the converted model produces correct results:
+
+    ```python
+    import numpy as np
+
+    # Create or load test data
+    X_test = np.load('KERAS_3layer_input.dat')
+
+    # Run prediction with hls4ml model
+    y_hls = hls_model.predict(X_test)
+
+    # Compare with original model (if using your own model)
+    # y_keras = model.predict(X_test)
+    # print(f"Accuracy match: {np.mean(np.abs(y_keras - y_hls))}")
+    ```
+
+    <Note>
+      The `predict()` method runs a bit-accurate C simulation of the firmware. This verifies correctness before committing to a full FPGA build.
+    </Note>
+  </Step>
+</Steps>
+
+## Complete Example
+
+Here's a complete end-to-end example you can copy and run:
+
+```python
+import hls4ml
+import numpy as np
+
+# 1. Fetch example model
+config = hls4ml.utils.fetch_example_model('KERAS_3layer.json')
+
+# 2. Convert to HLS
+hls_model = hls4ml.converters.keras_v2_to_hls(config)
+
+# 3. Compile (generates C++ but doesn't run synthesis)
+hls_model.compile()
+
+# 4. Test with example data
+X_test = np.load('KERAS_3layer_input.dat')
+y_pred = hls_model.predict(X_test)
+print(f"Predictions shape: {y_pred.shape}")
+
+# 5. Build and synthesize (requires HLS tools)
+hls_model.build(csim=True, synth=True)
+
+# 6. View results
+hls4ml.report.read_vivado_report('my-hls-test')
+```
+
+## Next Steps
+
+Now that you've converted your first model, explore more advanced features:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Model Conversion" icon="arrows-rotate" href="/concepts/model-conversion">
+    Learn about the conversion process and configuration options
+  </Card>
+  <Card title="Precision Optimization" icon="sliders" href="/concepts/precision-optimization">
+    Optimize resource usage with mixed precision and quantization
+  </Card>
+  <Card title="HLS Backends" icon="microchip" href="/concepts/hls-backends">
+    Configure different HLS tools (Vivado, Vitis, Quartus)
+  </Card>
+  <Card title="Profiling" icon="chart-line" href="/advanced/profiling">
+    Profile your model to identify optimization opportunities
+  </Card>
 </CardGroup>
 
+## Different Model Frameworks
+
+hls4ml supports multiple ML frameworks. Here's how to convert models from each:
+
+<Tabs>
+  <Tab title="Keras">
+    ```python
+    import hls4ml
+    from tensorflow import keras
+
+    model = keras.models.load_model('model.h5')
+    
+    hls_model = hls4ml.converters.convert_from_keras_model(
+        model,
+        output_dir='my-hls-test',
+        backend='Vivado',
+        hls_config={'Model': {'Precision': 'ap_fixed<16,6>', 'ReuseFactor': 1}}
+    )
+    ```
+  </Tab>
+  
+  <Tab title="PyTorch">
+    ```python
+    import hls4ml
+    import torch
+
+    model = torch.load('model.pt')
+    model.eval()
+    
+    hls_model = hls4ml.converters.convert_from_pytorch_model(
+        model,
+        output_dir='my-hls-test',
+        backend='Vivado',
+        hls_config={'Model': {'Precision': 'ap_fixed<16,6>', 'ReuseFactor': 1}}
+    )
+    ```
+  </Tab>
+  
+  <Tab title="ONNX">
+    ```python
+    import hls4ml
+    import onnx
+
+    model = onnx.load('model.onnx')
+    
+    hls_model = hls4ml.converters.convert_from_onnx_model(
+        model,
+        output_dir='my-hls-test',
+        backend='Vivado',
+        hls_config={'Model': {'Precision': 'ap_fixed<16,6>', 'ReuseFactor': 1}}
+    )
+    ```
+  </Tab>
+  
+  <Tab title="Config File">
+    ```python
+    import hls4ml
+
+    # Use a YAML configuration file
+    hls_model = hls4ml.converters.convert_from_config('config.yml')
+    ```
+  </Tab>
+</Tabs>
+
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  For detailed information on each framework, see the [Keras](/frontends/keras), [PyTorch](/frontends/pytorch), and [ONNX](/frontends/onnx) frontend documentation.
 </Note>
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="HLS tool not found">
+    Make sure your HLS tool (Vivado HLS, Vitis HLS, etc.) is installed and available in your PATH:
+    
+    ```bash
+    # For Vivado HLS
+    source /path/to/Vivado/2020.1/settings64.sh
+    
+    # For Vitis HLS
+    source /path/to/Vitis_HLS/2022.1/settings64.sh
+    ```
+  </Accordion>
+
+  <Accordion title="Model conversion fails">
+    Check that your layer types are supported:
+    
+    ```python
+    # List supported Keras layers
+    print(hls4ml.converters.get_supported_keras_layers())
+    
+    # List supported PyTorch layers
+    print(hls4ml.converters.get_supported_pytorch_layers())
+    
+    # List supported ONNX ops
+    print(hls4ml.converters.get_supported_onnx_layers())
+    ```
+  </Accordion>
+
+  <Accordion title="Resource usage too high">
+    Increase the reuse factor or reduce precision:
+    
+    ```python
+    hls_config = {
+        'Model': {
+            'Precision': 'ap_fixed<8,3>',  # Lower precision
+            'ReuseFactor': 8  # Higher reuse (slower but smaller)
+        }
+    }
+    ```
+    
+    See [Precision Optimization](/concepts/precision-optimization) for detailed guidance.
+  </Accordion>
+
+  <Accordion title="Accuracy degradation">
+    The model accuracy may differ from the original due to quantization. Use profiling to identify problematic layers:
+    
+    ```python
+    # Profile layer-by-layer accuracy
+    hls4ml.model.profiling.numerical(model, hls_model, X_test)
+    ```
+    
+    See [Profiling](/advanced/profiling) for more details.
+  </Accordion>
+</AccordionGroup>
+
+## Get Help
+
+<CardGroup cols={2}>
+  <Card title="FAQ" icon="circle-question" href="/faq">
+    Common questions and synthesis issues
+  </Card>
+  <Card title="GitHub Discussions" icon="github" href="https://github.com/fastmachinelearning/hls4ml/discussions">
+    Ask questions and share your projects
+  </Card>
+  <Card title="Video Tutorial" icon="video" href="https://www.youtube.com/watch?v=2y3GNY4tf7A">
+    Introduction to FPGAs, HLS, and ML inference
+  </Card>
+  <Card title="Full Tutorials" icon="graduation-cap" href="https://github.com/hls-fpga-machine-learning/hls4ml-tutorial">
+    Detailed hands-on tutorials
+  </Card>
+</CardGroup>

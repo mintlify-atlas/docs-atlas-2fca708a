@@ -1,0 +1,529 @@
+---
+title: HLS Backends
+description: Understanding the different HLS backend options and their trade-offs
+---
+
+## Overview
+
+hls4ml supports multiple HLS backends, each targeting different FPGA vendors and toolchains. The backend you choose determines the synthesis tool, target device, and generated code format.
+
+```python
+from hls4ml.backends import get_available_backends, get_backend
+
+# List all available backends
+print(get_available_backends())
+# Output: ['vivado', 'vitis', 'quartus', 'catapult', 'oneapi']
+```
+
+Backend registry: `hls4ml/backends/backend.py:153`
+
+## Xilinx Backends
+
+### Vivado HLS
+
+The legacy Xilinx HLS toolchain, widely used and well-tested.
+
+```python
+import hls4ml
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    backend='Vivado',
+    part='xcvu13p-flga2577-2-e',  # Virtex UltraScale+
+    clock_period=5,                # 200 MHz
+    clock_uncertainty='12.5%',
+    io_type='io_parallel'
+)
+```
+
+**Key Features:**
+- Mature and stable toolchain
+- Extensive documentation and community support
+- Supports all major Xilinx FPGA families
+- Default clock uncertainty: 12.5%
+- Wide range of optimization pragmas
+
+**Default Configuration:**
+```python
+{
+    'Part': 'xcvu13p-flga2577-2-e',
+    'ClockPeriod': 5,
+    'ClockUncertainty': '12.5%',
+    'IOType': 'io_parallel'
+}
+```
+
+Implementation: `hls4ml/backends/vivado/vivado_backend.py:42`
+
+**When to Use:**
+- Working with older Xilinx toolchains (< 2020.2)
+- Established projects using Vivado HLS
+- Maximum compatibility with existing IP
+
+### Vitis HLS
+
+The modern Xilinx HLS toolchain, successor to Vivado HLS.
+
+```python
+import hls4ml
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    backend='Vitis',
+    part='xcvu13p-flga2577-2-e',
+    clock_period=5,
+    clock_uncertainty='27%',  # Note: higher default
+    io_type='io_parallel'
+)
+```
+
+**Key Features:**
+- Modern Xilinx toolchain (2020.2+)
+- Improved optimization algorithms
+- Better support for modern C++ features
+- Default clock uncertainty: 27%
+- Enhanced streaming interfaces
+
+**Default Configuration:**
+```python
+{
+    'Part': 'xcvu13p-flga2577-2-e',
+    'ClockPeriod': 5,
+    'ClockUncertainty': '27%',  # More conservative
+    'IOType': 'io_parallel'
+}
+```
+
+Implementation: `hls4ml/backends/vitis/vitis_backend.py:20`
+
+**Vitis-Specific Features:**
+
+Vitis inherits most functionality from Vivado but adds validation passes:
+
+```python
+# Vitis validation flow
+validation_passes = [
+    'vitis:validate_conv_implementation',
+    'vitis:validate_resource_strategy',
+    'vitis:validate_resource_unrolled_strategy',
+    'vitis:validate_bidirectional_merge_mode',
+    'vitis:validate_bidirectional_io_type',
+    'vitis:validate_std_cpp_types',
+]
+```
+
+Validation flow: `hls4ml/backends/vitis/vitis_backend.py:27`
+
+**When to Use:**
+- New projects with Xilinx FPGAs
+- Using Vivado/Vitis 2020.2 or later
+- Need modern toolchain features
+- Targeting UltraScale+ or Versal devices
+
+### Vivado vs. Vitis Comparison
+
+| Feature | Vivado HLS | Vitis HLS |
+|---------|-----------|----------|
+| Toolchain Version | Legacy (< 2020.2) | Modern (>= 2020.2) |
+| Clock Uncertainty | 12.5% | 27% |
+| Optimization | Mature | Enhanced |
+| C++ Support | C++03/11 | C++14/17 |
+| Maintenance | Legacy support | Active development |
+| Recommended | Existing projects | New projects |
+
+## Intel Backends
+
+### Quartus (Intel HLS Compiler)
+
+For Intel/Altera FPGAs using Intel HLS Compiler.
+
+```python
+import hls4ml
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    backend='Quartus',
+    part='Arria10',  # or 'Stratix10', 'Cyclone10'
+    clock_period=5,
+    io_type='io_parallel'
+)
+```
+
+**Key Features:**
+- Targets Intel/Altera FPGAs
+- Uses Intel HLS Compiler
+- Different pragma syntax from Xilinx
+- AC (algorithmic C) data types
+- No clock uncertainty parameter
+
+**Default Configuration:**
+```python
+{
+    'Part': 'Arria10',
+    'ClockPeriod': 5,
+    'IOType': 'io_parallel'
+}
+```
+
+Implementation: `hls4ml/backends/quartus/quartus_backend.py:27`
+
+**Quartus-Specific Optimizations:**
+
+Quartus backend includes Intel-specific optimization passes:
+
+```python
+quartus_types = [
+    'quartus:transform_types',
+    'quartus:register_bram_weights',
+    'quartus:apply_resource_strategy',
+    'quartus:apply_winograd_kernel_transformation',
+]
+```
+
+Type transformations: `hls4ml/backends/quartus/quartus_backend.py:60`
+
+**Data Types:**
+
+Quartus uses AC types instead of AP types:
+
+```python
+# Xilinx (Vivado/Vitis): ap_fixed<16,6>
+# Intel (Quartus): ac_fixed<16,6,true>
+
+config = {
+    'Model': {
+        'Precision': 'ac_fixed<16,6,true>',  # true = signed
+        'ReuseFactor': 1
+    }
+}
+```
+
+**When to Use:**
+- Targeting Intel/Altera FPGAs
+- Using Intel Quartus Prime
+- Need Intel-specific optimizations
+- Working with Arria, Stratix, or Cyclone families
+
+### oneAPI (Intel FPGA)
+
+Alternative Intel FPGA flow using oneAPI.
+
+```python
+import hls4ml
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    backend='oneAPI',
+    part='Arria10',
+    clock_period=5,
+    io_type='io_parallel'
+)
+```
+
+**Key Features:**
+- Modern Intel FPGA toolchain
+- SYCL-based development
+- Cross-architecture support
+- Different programming model
+
+**When to Use:**
+- Modern Intel FPGA development
+- Cross-platform portability needs
+- Integration with oneAPI ecosystem
+
+## Catapult HLS
+
+Siemens (Mentor Graphics) Catapult HLS for vendor-neutral synthesis.
+
+```python
+import hls4ml
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    backend='Catapult',
+    part='your-fpga-part',
+    clock_period=5,
+    io_type='io_parallel'
+)
+```
+
+**Key Features:**
+- Vendor-neutral HLS
+- Supports multiple FPGA vendors
+- Advanced optimization algorithms
+- SystemC-based flow
+- Different synthesis approach
+
+**When to Use:**
+- Need vendor-neutral design
+- Targeting multiple FPGA vendors
+- Have Catapult HLS license
+- Advanced synthesis requirements
+
+Implementation: `hls4ml/backends/catapult/`
+
+## Backend Selection Guide
+
+<Steps>
+  <Step title="Identify Your FPGA Vendor">
+    - **Xilinx** → Vivado or Vitis
+    - **Intel/Altera** → Quartus or oneAPI
+    - **Multiple vendors** → Catapult
+  </Step>
+  
+  <Step title="Check Toolchain Version">
+    - **Xilinx < 2020.2** → Vivado HLS
+    - **Xilinx >= 2020.2** → Vitis HLS
+    - **Intel** → Quartus version compatibility
+  </Step>
+  
+  <Step title="Consider Project Requirements">
+    - **Legacy project** → Match existing backend
+    - **New project** → Use latest backend (Vitis/oneAPI)
+    - **Vendor flexibility** → Catapult
+  </Step>
+</Steps>
+
+## Backend-Specific Configuration
+
+### Supported Boards
+
+Backends support predefined board configurations:
+
+```python
+# Using a board name (auto-selects part)
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    backend='Vivado',
+    board='pynq-z2',  # Predefined board
+    clock_period=10
+)
+
+# Board overrides part specification
+# See supported_board.json for available boards
+```
+
+### Clock Configuration
+
+Clock timing varies by backend:
+
+```python
+# Vivado/Vitis
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    backend='Vivado',
+    clock_period=5,           # 5ns = 200 MHz
+    clock_uncertainty='12.5%' # Vivado default
+)
+
+# Quartus (no uncertainty parameter)
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    backend='Quartus',
+    clock_period=5  # Uncertainty handled internally
+)
+```
+
+### Writer Configuration
+
+All backends support writer configuration:
+
+```python
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    backend='Vivado',
+    namespace='myproject',        # C++ namespace
+    write_weights_txt=True,       # Write weights to txt files
+    write_tar=False               # Don't create tarball
+)
+```
+
+## Backend Flows
+
+Each backend defines compilation flows:
+
+```python
+# Get available flows for a backend
+backend = get_backend('Vivado')
+flows = backend.get_available_flows()
+print(flows)
+# ['convert', 'vivado:ip', 'vivado:fifo_depth_optimization', ...]
+
+# Use specific flow
+config['HLSConfig']['Flows'] = ['vivado:ip']
+```
+
+Flow system: `hls4ml/model/flow.py`
+
+## Performance Comparison
+
+### Resource Usage
+
+Different backends may use resources differently for the same model:
+
+- **Vivado/Vitis** - Optimized for Xilinx DSP slices and block RAM
+- **Quartus** - Optimized for Intel DSP blocks and M20K memory
+- **Catapult** - Vendor-neutral, may not exploit vendor-specific features
+
+### Synthesis Time
+
+Synthesis time varies significantly:
+
+- **Vivado HLS** - Generally faster synthesis
+- **Vitis HLS** - More optimization, longer synthesis
+- **Quartus** - Varies by device family
+- **Catapult** - Depends on target backend
+
+### Achieved Latency
+
+Latency depends on backend optimizations:
+
+- **Vivado/Vitis** - Excellent pipelining, low latency
+- **Quartus** - Competitive latency with Intel devices
+- **Catapult** - Good but may vary by target
+
+## Backend Architecture
+
+### Backend Class Structure
+
+All backends inherit from a base class:
+
+```python
+class Backend:
+    def __init__(self, name):
+        self.name = name
+        self.custom_source = {}
+        self._init_optimizers()
+
+    def create_initial_config(self, **kwargs):
+        """Create backend-specific configuration"""
+        raise NotImplementedError
+
+    def create_layer_class(self, layer_class):
+        """Wrap layer class with backend attributes"""
+        raise NotImplementedError
+
+    def get_default_flow(self):
+        """Return default compilation flow"""
+        raise NotImplementedError
+```
+
+Base backend: `hls4ml/backends/backend.py:17`
+
+### Registering Custom Backends
+
+You can register custom backends:
+
+```python
+from hls4ml.backends import register_backend, Backend
+
+class MyCustomBackend(Backend):
+    def __init__(self):
+        super().__init__('MyCustom')
+    
+    def create_initial_config(self, **kwargs):
+        return {'Part': 'custom-part'}
+    
+    # Implement other required methods...
+
+register_backend('MyCustom', MyCustomBackend)
+```
+
+Backend registration: `hls4ml/backends/backend.py:156`
+
+## Common Pitfalls
+
+<Warning>
+  **Clock Uncertainty Differences**: Vitis uses 27% clock uncertainty by default vs. Vivado's 12.5%. This affects timing closure but provides more margin.
+</Warning>
+
+<Warning>
+  **Data Type Syntax**: Xilinx backends use `ap_fixed<W,I>` while Intel backends use `ac_fixed<W,I,signed>`. Make sure to use the correct syntax for your backend.
+</Warning>
+
+<Warning>
+  **IO Type Support**: Not all backends support all IO types equally. `io_stream` is better tested on Vivado/Vitis than other backends.
+</Warning>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Match backend to your toolchain">
+    Use the backend that matches your installed HLS toolchain version to avoid compatibility issues.
+  </Accordion>
+  
+  <Accordion title="Test with default settings first">
+    Start with default backend configurations before customizing clock periods or other parameters.
+  </Accordion>
+  
+  <Accordion title="Consider tool availability">
+    Some backends require commercial licenses. Ensure you have access to the required tools before choosing a backend.
+  </Accordion>
+  
+  <Accordion title="Review backend documentation">
+    Each backend has specific features and limitations. Review the vendor HLS documentation for best results.
+  </Accordion>
+</AccordionGroup>
+
+## Migration Between Backends
+
+### Vivado to Vitis
+
+```python
+# Vivado configuration
+config_vivado = {
+    'Model': {
+        'Precision': 'ap_fixed<16,6>',
+        'ReuseFactor': 1
+    }
+}
+
+# Same config works for Vitis, just change backend
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config_vivado,  # Same config!
+    backend='Vitis',           # Different backend
+    clock_uncertainty='27%'    # Adjust for Vitis default
+)
+```
+
+### Xilinx to Intel
+
+```python
+# Convert precision syntax
+config_xilinx = {'Model': {'Precision': 'ap_fixed<16,6>'}}
+config_intel = {'Model': {'Precision': 'ac_fixed<16,6,true>'}}
+
+# Convert from Vivado
+hls_model_vivado = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config_xilinx,
+    backend='Vivado'
+)
+
+# Convert to Quartus (update config)
+hls_model_quartus = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config_intel,
+    backend='Quartus'
+)
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Model Conversion" icon="arrows-rotate" href="./model-conversion">
+    Learn detailed conversion configuration
+  </Card>
+  
+  <Card title="Precision Optimization" icon="gauge-high" href="./precision-optimization">
+    Optimize fixed-point precision settings
+  </Card>
+</CardGroup>

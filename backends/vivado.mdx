@@ -1,0 +1,393 @@
+---
+title: 'Vivado Backend'
+description: 'Deploy neural networks on AMD/Xilinx FPGAs using Vivado HLS'
+icon: 'microchip'
+---
+
+<Warning>
+  The Vivado backend targets the discontinued **Vivado HLS** compiler. For new designs, consider using the [Vitis backend](/backends/vitis) instead.
+</Warning>
+
+## Overview
+
+The **Vivado** backend enables deployment of neural networks on AMD/Xilinx FPGAs using the Vivado HLS compiler. It generates High-Level Synthesis (HLS) IP cores that can be integrated into Vivado designs.
+
+### When to Use Vivado Backend
+
+- Working with legacy projects using Vivado HLS
+- Targeting older AMD/Xilinx FPGA development flows
+- Maintaining existing Vivado HLS-based designs
+
+<Note>
+  New hls4ml developments may not be backported to the Vivado backend. Consider migrating to Vitis for access to latest features.
+</Note>
+
+## Installation and Setup
+
+### Prerequisites
+
+- **Vivado HLS** installation (ensure `vivado_hls` is on PATH)
+- AMD/Xilinx FPGA development tools
+- Python 3.8 or higher
+- hls4ml library installed
+
+### Environment Setup
+
+```bash
+# Verify Vivado HLS is available
+command -v vivado_hls
+
+# Source Vivado settings (adjust path for your installation)
+source /tools/Xilinx/Vivado/<version>/settings64.sh
+```
+
+## Configuration
+
+### Basic Configuration
+
+Create a model configuration for the Vivado backend:
+
+```python
+import hls4ml
+
+config = hls4ml.utils.config_from_keras_model(
+    model, 
+    granularity='name',
+    backend='Vivado'
+)
+
+# Convert model
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='my_vivado_project',
+    part='xcvu13p-flga2577-2-e',
+    clock_period=5,
+    io_type='io_parallel'
+)
+```
+
+### Configuration Options
+
+The Vivado backend supports the following configuration parameters:
+
+<ParamField path="part" type="string" default="xcvu13p-flga2577-2-e">
+  FPGA part number to target
+</ParamField>
+
+<ParamField path="clock_period" type="int" default="5">
+  Clock period in nanoseconds
+</ParamField>
+
+<ParamField path="clock_uncertainty" type="string" default="12.5%">
+  Clock uncertainty percentage for timing analysis
+</ParamField>
+
+<ParamField path="io_type" type="string" default="io_parallel">
+  I/O implementation type:
+  - `io_parallel`: Processes all inputs/outputs simultaneously
+  - `io_stream`: Streams data through the design
+</ParamField>
+
+<ParamField path="namespace" type="string" default="None">
+  Optional C++ namespace for generated code
+</ParamField>
+
+<ParamField path="write_weights_txt" type="bool" default="true">
+  Write weights to .txt files for faster compilation
+</ParamField>
+
+<ParamField path="write_tar" type="bool" default="false">
+  Compress output directory into .tar.gz file
+</ParamField>
+
+### Layer-Specific Configuration
+
+#### Strategy Selection
+
+Vivado backend supports multiple implementation strategies:
+
+```python
+config['Model']['Strategy'] = 'Resource'  # or 'Latency'
+
+# Per-layer configuration
+config['LayerName']['ReuseFactor'] = 16
+config['LayerName']['Strategy'] = 'Resource'
+```
+
+**Available Strategies:**
+
+- **Latency**: Fully unrolled implementation (low latency, high resource usage)
+- **Resource**: Serialized implementation with configurable reuse factor
+- **Resource_Unrolled**: Combination of resource sharing with partial unrolling
+- **Distributed_Arithmetic**: Uses lookup tables for dense layers (must have `ReuseFactor=1`)
+
+#### Convolution Layers
+
+```python
+# Conv2D configuration
+config['conv2d_layer']['ConvImplementation'] = 'LineBuffer'  # or 'Encoded'
+config['conv2d_layer']['ParallelizationFactor'] = 4
+config['conv2d_layer']['ReuseFactor'] = 8
+```
+
+#### RNN Layers
+
+```python
+# LSTM/GRU configuration
+config['lstm_layer']['ReuseFactor'] = 1
+config['lstm_layer']['RecurrentReuseFactor'] = 1
+config['lstm_layer']['static'] = True  # Static vs dynamic implementation
+config['lstm_layer']['table_size'] = 1024
+```
+
+## Build Process
+
+### Synthesis Commands
+
+```python
+# Compile and synthesize the model
+hls_model.compile()
+
+# Build with various options
+report = hls_model.build(
+    reset=False,      # Reset project before build
+    csim=True,        # Run C simulation
+    synth=True,       # Run HLS synthesis
+    cosim=False,      # Run co-simulation
+    validation=False, # Run validation
+    export=False,     # Export IP
+    vsynth=False      # Run Vivado synthesis
+)
+```
+
+### Build Options
+
+<Accordion title="Detailed Build Options">
+
+| Option | Description | Default |
+|--------|-------------|----------|
+| `reset` | Reset project before building | `False` |
+| `csim` | Run C simulation testbench | `True` |
+| `synth` | Run HLS synthesis | `True` |
+| `cosim` | Run RTL co-simulation | `False` |
+| `validation` | Run validation tests | `False` |
+| `export` | Export as IP for Vivado | `False` |
+| `vsynth` | Run Vivado synthesis | `False` |
+| `fifo_opt` | Optimize FIFO depths | `False` |
+
+</Accordion>
+
+### TCL Script Execution
+
+The build process generates and executes a `build_prj.tcl` script:
+
+```bash
+cd my_vivado_project
+vivado_hls -f build_prj.tcl "csim=1 synth=1 cosim=0"
+```
+
+## Example Project Structure
+
+After conversion, the project structure looks like:
+
+```
+my_vivado_project/
+├── firmware/
+│   ├── myproject.cpp          # Top-level HLS implementation
+│   ├── myproject.h            # Header file
+│   ├── parameters.h           # Network parameters
+│   ├── weights/               # Weight data files
+│   └── nnet_utils/            # HLS utility functions
+├── tb_data/
+│   ├── tb_input_features.dat  # Test input data
+│   └── tb_output_predictions.dat  # Expected outputs
+├── myproject_test.cpp         # C++ testbench
+├── build_prj.tcl              # Vivado HLS build script
+└── myproject_prj/             # HLS project (after build)
+    ├── solution1/
+    │   ├── syn/
+    │   │   └── report/        # Synthesis reports
+    │   └── impl/              # Implementation results
+    └── vivado_hls.log
+```
+
+## Performance Optimization
+
+### Reuse Factor Tuning
+
+The reuse factor controls resource/latency tradeoff:
+
+```python
+# Lower reuse factor = more parallel, higher resources
+config['dense_1']['ReuseFactor'] = 1  # Fully parallel
+
+# Higher reuse factor = more serial, lower resources
+config['dense_1']['ReuseFactor'] = 64  # Highly serialized
+```
+
+### Precision Configuration
+
+```python
+from hls4ml.model.types import FixedPrecisionType
+
+# Set precision for layer outputs
+config['dense_1']['Precision'] = 'ap_fixed<16,6>'
+
+# Set accumulator precision
+config['dense_1']['accum_t'] = FixedPrecisionType(24, 12)
+```
+
+### Pipeline Optimization
+
+For streaming designs:
+
+```python
+config['Model']['IOType'] = 'io_stream'
+config['Model']['Strategy'] = 'Latency'
+
+# Optimize FIFO depths
+report = hls_model.build(fifo_opt=True)
+```
+
+## Performance Characteristics
+
+### Resource Usage
+
+- **LUTs**: Depends on precision, strategy, and reuse factor
+- **DSPs**: Used for multiplications (resource strategy shares DSPs)
+- **BRAM**: Stores weights and intermediate data
+- **FFs**: Flip-flops for pipelining
+
+### Latency Considerations
+
+**io_parallel:**
+- Latency = Sum of layer latencies
+- Initiation interval (II) = Total latency for pipelined designs
+
+**io_stream:**
+- Pipelined dataflow between layers
+- Throughput limited by slowest layer
+- Lower latency for streaming applications
+
+### Clock Frequency
+
+Typical achievable frequencies:
+- **Conservative**: 100-150 MHz (clock_period=10-6.67ns)
+- **Moderate**: 150-200 MHz (clock_period=6.67-5ns)
+- **Aggressive**: 200-250 MHz (clock_period=5-4ns)
+
+## Advanced Features
+
+### Distributed Arithmetic
+
+For dense layers, enable distributed arithmetic implementation:
+
+```python
+config['dense_1']['Strategy'] = 'Distributed_Arithmetic'
+config['dense_1']['ReuseFactor'] = 1  # Required
+```
+
+### Quantization-Aware Training
+
+Integrate with QKeras for quantization:
+
+```python
+from qkeras import QDense, quantized_bits
+
+# Create quantized model
+model = Sequential([
+    QDense(64, kernel_quantizer=quantized_bits(8,0,alpha=1)),
+    # ...
+])
+
+# Convert to hls4ml
+hls_model = hls4ml.converters.convert_from_keras_model(model)
+```
+
+### Custom Layers
+
+Implement custom layer templates:
+
+```python
+from hls4ml.model.layers import Layer
+from hls4ml.model.optimizer import layer_optimizer
+
+@layer_optimizer(CustomLayer)
+def init_custom_layer(self, layer):
+    # Configure custom layer
+    layer.set_attr('custom_param', value)
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Vivado HLS not found">
+    Ensure `vivado_hls` is in your PATH:
+    ```bash
+    export PATH=/tools/Xilinx/Vivado/<version>/bin:$PATH
+    ```
+    Or source the settings script:
+    ```bash
+    source /tools/Xilinx/Vivado/<version>/settings64.sh
+    ```
+  </Accordion>
+
+  <Accordion title="Timing not met">
+    - Increase clock period
+    - Increase reuse factors
+    - Reduce precision
+    - Enable pipelining pragmas
+    - Use lower clock uncertainty
+  </Accordion>
+
+  <Accordion title="Resource usage too high">
+    - Increase reuse factors
+    - Use Resource strategy instead of Latency
+    - Reduce precision
+    - Enable weight compression
+    - Use io_stream for large models
+  </Accordion>
+
+  <Accordion title="Compilation errors">
+    - Check that all layer types are supported
+    - Verify precision specifications are valid
+    - Ensure weight dimensions match layer configuration
+    - Check for unsupported activation functions
+  </Accordion>
+</AccordionGroup>
+
+## Migration to Vitis
+
+To migrate from Vivado to Vitis backend:
+
+```python
+# Change backend specification
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    backend='Vitis',  # Changed from 'Vivado'
+    output_dir='my_vitis_project'
+)
+```
+
+<Note>
+  Most configurations are compatible, but review Vitis-specific validation passes and adjust as needed.
+</Note>
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Vitis Backend" icon="forward" href="/backends/vitis">
+    Modern alternative using Vitis HLS
+  </Card>
+  <Card title="Configuration Guide" icon="sliders" href="/concepts/model-conversion">
+    Detailed configuration options
+  </Card>
+  <Card title="Optimization Tips" icon="gauge-high" href="/advanced/optimization">
+    Performance tuning strategies
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Python API documentation
+  </Card>
+</CardGroup>

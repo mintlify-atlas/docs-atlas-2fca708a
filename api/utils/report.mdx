@@ -1,0 +1,427 @@
+---
+title: 'Report Utilities'
+description: 'Parse and analyze synthesis reports'
+---
+
+## Overview
+
+The report module provides utilities for parsing synthesis reports from different HLS backends and extracting resource usage, timing, and performance metrics.
+
+## Vivado Reports
+
+### read_vivado_report
+
+Read and parse a Vivado HLS synthesis report.
+
+```python
+hls4ml.report.read_vivado_report(hls_dir)
+```
+
+<ParamField path="hls_dir" type="str" required>
+  Path to the Vivado HLS project directory.
+</ParamField>
+
+<ResponseField name="report" type="dict">
+  Dictionary containing synthesis results:
+  - `LUT`: LUT usage
+  - `FF`: Flip-flop usage
+  - `DSP`: DSP block usage
+  - `BRAM_18K`: Block RAM usage
+  - `LatencyBest`: Best-case latency (cycles)
+  - `LatencyWorst`: Worst-case latency (cycles)
+  - `IntervalMin`: Minimum initiation interval
+  - `IntervalMax`: Maximum initiation interval
+  - `ClockPeriod`: Target clock period (ns)
+</ResponseField>
+
+### Example
+
+```python
+import hls4ml
+
+# Build model
+hls_model = hls4ml.converters.convert_from_keras_model(
+    keras_model,
+    output_dir='my-hls-test',
+    backend='Vivado'
+)
+
+hls_model.build(synth=True)
+
+# Read report
+report = hls4ml.report.read_vivado_report('my-hls-test/myproject_prj')
+
+print("\nResource Usage:")
+print(f"  LUT: {report['LUT']}")
+print(f"  FF: {report['FF']}")
+print(f"  DSP: {report['DSP']}")
+print(f"  BRAM: {report['BRAM_18K']}")
+
+print("\nTiming:")
+print(f"  Latency: {report['LatencyBest']} - {report['LatencyWorst']} cycles")
+print(f"  Interval: {report['IntervalMin']} - {report['IntervalMax']} cycles")
+print(f"  Clock: {report['ClockPeriod']} ns")
+```
+
+### parse_vivado_report
+
+Parse Vivado HLS report files directly.
+
+```python
+hls4ml.report.parse_vivado_report(report_file)
+```
+
+<ParamField path="report_file" type="str" required>
+  Path to the report XML file.
+</ParamField>
+
+<ResponseField name="report" type="dict">
+  Parsed synthesis report.
+</ResponseField>
+
+### print_vivado_report
+
+Print formatted Vivado synthesis report.
+
+```python
+hls4ml.report.print_vivado_report(report)
+```
+
+<ParamField path="report" type="dict" required>
+  Report dictionary from `read_vivado_report()`.
+</ParamField>
+
+### Example
+
+```python
+import hls4ml
+
+# Get report
+report = hls4ml.report.read_vivado_report('my-hls-test/myproject_prj')
+
+# Print formatted
+hls4ml.report.print_vivado_report(report)
+```
+
+Output:
+```
+========================================
+Vivado HLS Synthesis Report
+========================================
+
+Resources:
+  LUT         :        1234 / 274080 (0.45%)
+  FF          :        2345 / 548160 (0.43%)
+  DSP         :          12 / 1728 (0.69%)
+  BRAM_18K    :           4 / 912 (0.44%)
+
+Timing:
+  Clock Period: 5.0 ns
+  Latency:
+    Best      : 125 cycles
+    Worst     : 125 cycles
+  Interval:
+    Min       : 126 cycles
+    Max       : 126 cycles
+========================================
+```
+
+## Quartus Reports
+
+### read_quartus_report
+
+Read and parse Quartus synthesis report.
+
+```python
+hls4ml.report.read_quartus_report(hls_dir)
+```
+
+<ParamField path="hls_dir" type="str" required>
+  Path to the Quartus project directory.
+</ParamField>
+
+<ResponseField name="report" type="dict">
+  Dictionary containing:
+  - `ALM`: Adaptive Logic Module usage
+  - `REG`: Register usage
+  - `DSP`: DSP block usage
+  - `RAM`: RAM block usage
+  - `LatencyBest`: Best-case latency
+  - `LatencyWorst`: Worst-case latency
+</ResponseField>
+
+### parse_quartus_report
+
+Parse Quartus report files.
+
+```python
+hls4ml.report.parse_quartus_report(report_file)
+```
+
+### Example
+
+```python
+import hls4ml
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    keras_model,
+    backend='Quartus'
+)
+
+hls_model.build(synth=True)
+
+report = hls4ml.report.read_quartus_report(hls_model.config.get_output_dir())
+print(f"ALMs: {report['ALM']}")
+print(f"DSPs: {report['DSP']}")
+```
+
+## Catapult Reports
+
+### read_catapult_report
+
+Read Catapult HLS synthesis report.
+
+```python
+hls4ml.report.read_catapult_report(hls_dir)
+```
+
+<ResponseField name="report" type="dict">
+  Dictionary with Catapult-specific metrics.
+</ResponseField>
+
+### parse_catapult_report
+
+Parse Catapult report files.
+
+```python
+hls4ml.report.parse_catapult_report(report_file)
+```
+
+## OneAPI Reports
+
+### parse_oneapi_report
+
+Parse Intel OneAPI synthesis report.
+
+```python
+hls4ml.report.parse_oneapi_report(hls_dir)
+```
+
+### print_oneapi_report
+
+Print formatted OneAPI report.
+
+```python
+hls4ml.report.print_oneapi_report(report)
+```
+
+## Analyzing Reports
+
+### Compare Resource Usage
+
+```python
+import hls4ml
+import matplotlib.pyplot as plt
+
+# Build multiple configurations
+configs = [
+    {'ReuseFactor': 1, 'Precision': 'ap_fixed<16,6>'},
+    {'ReuseFactor': 4, 'Precision': 'ap_fixed<16,6>'},
+    {'ReuseFactor': 1, 'Precision': 'ap_fixed<8,4>'},
+]
+
+reports = []
+for i, config in enumerate(configs):
+    hls_config = {'Model': config}
+    model = hls4ml.converters.convert_from_keras_model(
+        keras_model,
+        output_dir=f'config_{i}',
+        hls_config=hls_config
+    )
+    model.build(synth=True)
+    report = hls4ml.report.read_vivado_report(f'config_{i}/myproject_prj')
+    reports.append(report)
+
+# Compare
+resources = ['LUT', 'FF', 'DSP', 'BRAM_18K']
+for resource in resources:
+    values = [r[resource] for r in reports]
+    plt.bar(range(len(configs)), values)
+    plt.xlabel('Configuration')
+    plt.ylabel(resource)
+    plt.title(f'{resource} Usage Comparison')
+    plt.show()
+```
+
+### Latency Analysis
+
+```python
+import hls4ml
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Test different reuse factors
+reuse_factors = [1, 2, 4, 8, 16, 32]
+latencies = []
+resources = []
+
+for rf in reuse_factors:
+    hls_config = {
+        'Model': {
+            'ReuseFactor': rf,
+            'Precision': 'ap_fixed<16,6>'
+        }
+    }
+    
+    model = hls4ml.converters.convert_from_keras_model(
+        keras_model,
+        output_dir=f'rf_{rf}',
+        hls_config=hls_config
+    )
+    
+    report = model.build(synth=True)
+    latencies.append(report['LatencyWorst'])
+    resources.append(report['LUT'])
+
+# Plot tradeoff
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+
+ax1.plot(reuse_factors, latencies, 'o-')
+ax1.set_xlabel('Reuse Factor')
+ax1.set_ylabel('Latency (cycles)')
+ax1.set_title('Latency vs Reuse Factor')
+ax1.grid(True)
+
+ax2.plot(reuse_factors, resources, 'o-')
+ax2.set_xlabel('Reuse Factor')
+ax2.set_ylabel('LUT Usage')
+ax2.set_title('Resource vs Reuse Factor')
+ax2.grid(True)
+
+plt.tight_layout()
+plt.show()
+```
+
+### Export Report Data
+
+```python
+import hls4ml
+import json
+import csv
+
+# Get report
+report = hls4ml.report.read_vivado_report('my-hls-test/myproject_prj')
+
+# Export to JSON
+with open('synthesis_report.json', 'w') as f:
+    json.dump(report, f, indent=2)
+
+# Export to CSV
+with open('synthesis_report.csv', 'w', newline='') as f:
+    writer = csv.writer(f)
+    writer.writerow(['Metric', 'Value'])
+    for key, value in report.items():
+        writer.writerow([key, value])
+
+print("Report exported to JSON and CSV")
+```
+
+### Resource Utilization Summary
+
+```python
+import hls4ml
+
+def print_resource_summary(report, fpga_total):
+    """Print resource utilization as percentage."""
+    print("\nResource Utilization:")
+    print("=" * 50)
+    
+    for resource in ['LUT', 'FF', 'DSP', 'BRAM_18K']:
+        used = report.get(resource, 0)
+        total = fpga_total.get(resource, 0)
+        
+        if total > 0:
+            percent = (used / total) * 100
+            print(f"{resource:12s}: {used:8d} / {total:8d} ({percent:6.2f}%)")
+        else:
+            print(f"{resource:12s}: {used:8d}")
+    
+    print("=" * 50)
+
+# Example usage
+report = hls4ml.report.read_vivado_report('my-hls-test/myproject_prj')
+
+# FPGA resources (example: Xilinx XCVU9P)
+fpga_resources = {
+    'LUT': 1182240,
+    'FF': 2364480,
+    'DSP': 6840,
+    'BRAM_18K': 2160
+}
+
+print_resource_summary(report, fpga_resources)
+```
+
+## Performance Metrics
+
+### Calculate Throughput
+
+```python
+import hls4ml
+
+def calculate_throughput(report, clock_mhz=200):
+    """Calculate throughput in inferences per second."""
+    # Get initiation interval
+    ii = report.get('IntervalMin', report.get('IntervalMax', 1))
+    
+    # Calculate throughput
+    clock_hz = clock_mhz * 1e6
+    throughput = clock_hz / ii
+    
+    return throughput
+
+report = hls4ml.report.read_vivado_report('my-hls-test/myproject_prj')
+throughput = calculate_throughput(report, clock_mhz=200)
+
+print(f"Throughput: {throughput:,.0f} inferences/second")
+print(f"           {throughput/1e6:.2f} million inferences/second")
+```
+
+### Calculate Power Efficiency
+
+```python
+def estimate_power(report, voltage=1.0, clock_mhz=200):
+    """Rough power estimation."""
+    # Simplified power model
+    dynamic_power = (
+        report['LUT'] * 0.001 +      # mW per LUT
+        report['FF'] * 0.0005 +      # mW per FF
+        report['DSP'] * 0.1 +        # mW per DSP
+        report['BRAM_18K'] * 0.05    # mW per BRAM
+    )
+    
+    # Scale with clock frequency
+    dynamic_power *= (clock_mhz / 100.0)
+    
+    # Add static power (rough estimate)
+    static_power = 500  # mW
+    
+    total_power = dynamic_power + static_power
+    return total_power
+
+report = hls4ml.report.read_vivado_report('my-hls-test/myproject_prj')
+power_mw = estimate_power(report)
+throughput = calculate_throughput(report)
+
+efficiency = throughput / (power_mw / 1000)  # inferences per joule
+
+print(f"Estimated Power: {power_mw:.1f} mW")
+print(f"Throughput: {throughput:,.0f} inf/s")
+print(f"Efficiency: {efficiency:,.0f} inferences/joule")
+```
+
+## See Also
+
+- [ModelGraph](/api/model/model)
+- [Backends](/api/backends/backend)
+- [Configuration](/api/utils/config)

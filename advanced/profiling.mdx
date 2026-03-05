@@ -1,0 +1,334 @@
+---
+title: Model Profiling
+description: Profile and analyze model weights, activations, and layer-by-layer outputs
+---
+
+The `hls4ml.model.profiling` module provides tools to analyze and visualize model weights and activations, helping you choose appropriate precision settings and validate model conversions.
+
+## Installation
+
+Profiling requires additional dependencies. Install them with:
+
+```bash
+pip install hls4ml[profiling]
+```
+
+## Numerical Profiling
+
+The `numerical()` function profiles weights and activations to help determine appropriate fixed-point precision:
+
+```python
+from hls4ml.model.profiling import numerical
+import matplotlib.pyplot as plt
+import yaml
+
+# Load your trained model and test data
+model = load_model()  # Keras or PyTorch model
+X = load_data()        # Test data
+
+# Load hls4ml config
+with open("keras-config.yml", 'r') as ymlfile:
+    config = yaml.load(ymlfile)
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model, hls_config=config, output_dir='hls4mlprj'
+)
+
+# Generate profiling plots
+wp, wph, ap, aph = numerical(model=model, hls_model=hls_model, X=X)
+plt.show()
+```
+
+### Return Values
+
+The `numerical()` function returns four matplotlib figures:
+
+1. **wp**: Weights distribution (before optimization)
+2. **wph**: Weights distribution (after optimization)
+3. **ap**: Activations distribution (before optimization)
+4. **aph**: Activations distribution (after optimization)
+
+## Plot Types
+
+You can specify different visualization styles:
+
+```python
+# Available plot types: 'boxplot', 'histogram', 'violinplot'
+plots = numerical(model=model, hls_model=hls_model, X=X, plot='histogram')
+```
+
+### Boxplot (Default)
+
+Shows the median and quartiles of weight/activation distributions with box-and-whisker diagrams:
+
+```python
+plots = numerical(model=model, hls_model=hls_model, X=X, plot='boxplot')
+```
+
+- **Box**: Contains the middle 50% of values (25th to 75th percentile)
+- **Whiskers**: Extend to minimum and maximum values
+- **Grey boxes**: Show the range representable with current precision settings
+
+### Histogram
+
+Displays frequency distributions on a log scale:
+
+```python
+plots = numerical(model=model, hls_model=hls_model, X=X, plot='histogram')
+```
+
+## Usage Patterns
+
+Different input combinations produce different outputs:
+
+<Tabs>
+  <Tab title="Model Only">
+    ```python
+    # Only weights profiling, no activation profiling
+    wp, _, _, _ = numerical(model=model)
+    ```
+    
+    Produces only weight distribution plots without precision annotations.
+  </Tab>
+  
+  <Tab title="HLS Model Only">
+    ```python
+    # Before and after optimization weights
+    wp, wph, _, _ = numerical(hls_model=hls_model)
+    ```
+    
+    Shows weight distributions with grey boxes indicating configured precision types.
+  </Tab>
+  
+  <Tab title="Model + Data">
+    ```python
+    # Weights and activations profiling
+    wp, _, ap, _ = numerical(model=model, X=X)
+    ```
+    
+    Produces both weight and activation profiles without precision annotations.
+  </Tab>
+  
+  <Tab title="Full Profiling">
+    ```python
+    # Complete profiling with precision analysis
+    wp, wph, ap, aph = numerical(model=model, hls_model=hls_model, X=X)
+    ```
+    
+    Complete analysis with all plots and precision annotations.
+  </Tab>
+</Tabs>
+
+## Interpreting Results
+
+The grey boxes in profiling plots indicate the range representable by your configured precision:
+
+<Check>
+  **Good Configuration**: Grey box covers the full range of the box-and-whisker plot
+</Check>
+
+<Warning>
+  **Overflow Risk**: Box-and-whisker extends beyond right edge of grey box. Increase integer bits.
+</Warning>
+
+<Warning>
+  **Precision Loss**: Box-and-whisker is much narrower than grey box. Consider reducing fractional bits to save resources.
+</Warning>
+
+### Optimization Impact
+
+Notice differences between "before" and "after" optimization plots:
+
+- BatchNormalization layers may be fused into preceding layers
+- Layer names may change after graph optimizations
+- Weight distributions change due to layer folding
+
+<Note>
+  When tuning precision, always work with the "after optimization" (final) model since that's what gets synthesized.
+</Note>
+
+## Layer-by-Layer Comparison
+
+Compare outputs between the original model and hls4ml conversion:
+
+```python
+from hls4ml.model.profiling import compare
+
+# Compare layer outputs
+fig = compare(keras_model, hls_model, X, plot_type='dist_diff')
+plt.show()
+```
+
+### Comparison Methods
+
+<Tabs>
+  <Tab title="dist_diff">
+    ```python
+    fig = compare(keras_model, hls_model, X, plot_type='dist_diff')
+    ```
+    
+    Shows normalized distribution of output differences between models. Values near 0 indicate close agreement.
+  </Tab>
+  
+  <Tab title="norm_diff">
+    ```python
+    fig = compare(keras_model, hls_model, X, plot_type='norm_diff')
+    ```
+    
+    Shows the L2 norm of the difference vector for each layer's output.
+  </Tab>
+</Tabs>
+
+<Warning>
+  The hls4ml model must have `Trace: True` in its configuration for layer-by-layer comparison to work.
+</Warning>
+
+## Weights and Activations Utilities
+
+For custom analysis, you can extract raw data:
+
+```python
+from hls4ml.model.profiling import weights_hlsmodel, activations_hlsmodel
+
+# Get weight statistics
+weight_data = weights_hlsmodel(hls_model, fmt='summary', plot='boxplot')
+
+# Profile activations
+activation_data = activations_hlsmodel(hls_model, X, fmt='summary', plot='boxplot')
+```
+
+### For Keras Models
+
+```python
+from hls4ml.model.profiling import weights_keras, activations_keras
+
+weight_data = weights_keras(model, fmt='summary', plot='boxplot')
+activation_data = activations_keras(model, X, fmt='summary', plot='boxplot')
+```
+
+### For PyTorch Models
+
+```python
+from hls4ml.model.profiling import weights_torch, activations_torch
+
+weight_data = weights_torch(model, fmt='summary', plot='boxplot')
+activation_data = activations_torch(model, X, fmt='summary', plot='boxplot')
+```
+
+## Visualization Tools
+
+The `hls4ml.utils.plot` module provides model visualization:
+
+```python
+from hls4ml.utils.plot import plot_model
+
+# Visualize model structure
+plot_model(
+    hls_model,
+    to_file='model.png',
+    show_shapes=True,
+    show_layer_names=True,
+    show_precision=True,
+    rankdir='TB',  # 'TB' for vertical, 'LR' for horizontal
+    dpi=96
+)
+```
+
+### Visualization Options
+
+- **show_shapes**: Display tensor shapes for inputs/outputs
+- **show_layer_names**: Show layer names in the diagram
+- **show_precision**: Display precision types for all variables
+- **rankdir**: Graph orientation (`'TB'` vertical or `'LR'` horizontal)
+- **dpi**: Image resolution
+
+<Note>
+  Visualization requires `pydot` and `graphviz` installed: `pip install pydot graphviz`
+</Note>
+
+## Best Practices
+
+<Steps>
+  <Step title="Profile with representative data">
+    Use a sufficiently large and diverse test dataset that covers the full range of expected inputs.
+  </Step>
+  
+  <Step title="Check both weights and activations">
+    Both weight and activation profiles are important for choosing precision. Activations may have different ranges than weights.
+  </Step>
+  
+  <Step title="Iterate on precision configuration">
+    Start with profiling results, adjust precision, re-profile, and verify with C simulation.
+  </Step>
+  
+  <Step title="Compare optimized model">
+    Always use the "after optimization" plots when tuning precision, as layer fusion and other optimizations affect value ranges.
+  </Step>
+  
+  <Step title="Validate accuracy">
+    After choosing precision from profiling, run C simulation to verify that model accuracy remains acceptable.
+  </Step>
+</Steps>
+
+## API Reference
+
+### numerical()
+
+```python
+hls4ml.model.profiling.numerical(
+    model=None,
+    hls_model=None,
+    X=None,
+    plot='boxplot'
+)
+```
+
+**Parameters:**
+- `model`: Keras or PyTorch model (optional)
+- `hls_model`: hls4ml ModelGraph (optional)
+- `X`: Test data for activation profiling (optional)
+- `plot`: Plot style - `'boxplot'`, `'histogram'`, or `'violinplot'`
+
+**Returns:** Tuple of (wp, wph, ap, aph) matplotlib figures
+
+### compare()
+
+```python
+hls4ml.model.profiling.compare(
+    keras_model,
+    hls_model,
+    X,
+    plot_type='dist_diff'
+)
+```
+
+**Parameters:**
+- `keras_model`: Original Keras model
+- `hls_model`: Converted hls4ml ModelGraph with `Trace: True`
+- `X`: Input test data
+- `plot_type`: `'dist_diff'` or `'norm_diff'`
+
+**Returns:** Matplotlib figure showing layer-by-layer differences
+
+### plot_model()
+
+```python
+hls4ml.utils.plot.plot_model(
+    model,
+    to_file='model.png',
+    show_shapes=False,
+    show_layer_names=True,
+    show_precision=False,
+    rankdir='TB',
+    dpi=96
+)
+```
+
+**Parameters:**
+- `model`: hls4ml ModelGraph
+- `to_file`: Output filename (PNG, PDF, etc.)
+- `show_shapes`: Display tensor shapes
+- `show_layer_names`: Display layer names
+- `show_precision`: Display precision information
+- `rankdir`: Graph direction (`'TB'` or `'LR'`)
+- `dpi`: Image resolution

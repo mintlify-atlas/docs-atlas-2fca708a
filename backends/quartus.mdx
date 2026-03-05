@@ -1,0 +1,509 @@
+---
+title: 'Quartus Backend'
+description: 'Deploy neural networks on Intel/Altera FPGAs using Intel HLS'
+icon: 'microchip'
+---
+
+<Warning>
+  The **Quartus** backend is deprecated and will be removed in a future version. Users should migrate to the [oneAPI backend](/backends/oneapi).
+</Warning>
+
+## Overview
+
+The **Quartus** backend enables deployment of neural networks on Intel/Altera FPGAs using the discontinued Intel HLS compiler. It generates C++ code that is compiled with the `i++` compiler and integrated into Quartus Prime designs.
+
+### When to Use Quartus Backend
+
+- **Legacy projects**: Maintaining existing Intel HLS-based designs
+- **Specific requirements**: Features not yet available in oneAPI backend
+  - Profiling and tracing
+  - BramFactor option for weight storage
+
+<Note>
+  For new projects, use the [oneAPI backend](/backends/oneapi) which provides better io_stream support and is actively maintained.
+</Note>
+
+## Installation and Setup
+
+### Prerequisites
+
+- **Intel HLS Compiler** (ensure `i++` is on PATH)
+- **Quartus Prime** for FPGA synthesis
+- Python 3.8 or higher
+- hls4ml library installed
+
+### Environment Setup
+
+```bash
+# Verify Intel HLS compiler is available
+command -v i++
+
+# Verify Quartus is available (for FPGA synthesis)
+command -v quartus_sh
+
+# Set Intel FPGA environment (adjust path for your installation)
+source /opt/intelFPGA_pro/hls/init_hls.sh
+```
+
+## Configuration
+
+### Basic Configuration
+
+Create a model configuration for the Quartus backend:
+
+```python
+import hls4ml
+
+config = hls4ml.utils.config_from_keras_model(
+    model,
+    granularity='name',
+    backend='Quartus'
+)
+
+# Convert model
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='my_quartus_project',
+    backend='Quartus',
+    part='Arria10',
+    clock_period=5,
+    io_type='io_parallel'
+)
+```
+
+### Configuration Options
+
+The Quartus backend supports the following configuration parameters:
+
+<ParamField path="part" type="string" default="Arria10">
+  FPGA device family:
+  - `Arria10`
+  - `Stratix10`
+  - `Agilex`
+</ParamField>
+
+<ParamField path="clock_period" type="int" default="5">
+  Clock period in nanoseconds (5ns = 200MHz)
+</ParamField>
+
+<ParamField path="io_type" type="string" default="io_parallel">
+  I/O implementation type:
+  - `io_parallel`: Parallel data processing
+  - `io_stream`: Streaming architecture (limited support)
+</ParamField>
+
+<ParamField path="write_tar" type="bool" default="false">
+  Compress output directory into .tar.gz file
+</ParamField>
+
+### Layer Configuration
+
+<Warning>
+  The Quartus backend **only supports Resource strategy**. There is no Latency implementation.
+</Warning>
+
+#### Dense Layers
+
+```python
+config['dense_layer'] = {
+    'ReuseFactor': 16,
+    'Strategy': 'Resource',  # Only Resource supported
+    'Precision': 'ac_fixed<16,6,true>',
+    'BramFactor': 0  # Weight storage: 0=LUT, >0=BRAM
+}
+```
+
+#### Convolutional Layers
+
+```python
+config['conv2d_layer'] = {
+    'ReuseFactor': 8,
+    'ParallelizationFactor': 1,
+    'Implementation': 'im2col',  # or 'Winograd', 'combination'
+    'Precision': 'ac_fixed<16,6,true>'
+}
+```
+
+**Convolution Implementations:**
+- `im2col`: Image-to-column transformation followed by matrix multiply
+- `Winograd`: Winograd fast convolution (for 3x3 filters)
+- `combination`: Automatic selection at compile-time
+
+#### Recurrent Layers
+
+```python
+config['gru_layer'] = {
+    'ReuseFactor': 1,
+    'RecurrentReuseFactor': 1,
+    'Strategy': 'Resource',
+    'table_size': 1024,
+    'table_t': 'ac_fixed<18,8,true>'
+}
+```
+
+## Build Process
+
+### Compilation Commands
+
+```python
+# Compile the model
+hls_model.compile()
+
+# Build with Intel HLS compiler
+report = hls_model.build(
+    synth=True,              # Run HLS synthesis
+    fpgasynth=False,         # Run Quartus FPGA synthesis
+    log_level=1,             # Logging verbosity (0, 1, 2)
+    cont_if_large_area=False # Continue if area estimate exceeds device
+)
+```
+
+### Build Options
+
+<Accordion title="Quartus Build Parameters">
+
+| Option | Description | Default |
+|--------|-------------|----------|
+| `synth` | Run Intel HLS synthesis | `True` |
+| `fpgasynth` | Run Quartus FPGA compilation | `False` |
+| `log_level` | Verbosity level (0-2) | `1` |
+| `cont_if_large_area` | Continue if design exceeds device resources | `False` |
+
+</Accordion>
+
+### Build Process Details
+
+The build process uses a Makefile:
+
+```bash
+cd my_quartus_project
+
+# HLS synthesis only
+make myproject-fpga
+
+# HLS synthesis with Quartus compile
+make myproject-fpga QUARTUS_COMPILE=--quartus-compile
+
+# Run simulation
+./myproject-fpga
+```
+
+## Example Project Structure
+
+```
+my_quartus_project/
+├── firmware/
+│   ├── myproject.cpp          # Main implementation
+│   ├── myproject.h            # Header file
+│   ├── parameters.h           # Network parameters
+│   ├── weights/               # Weight data
+│   └── nnet_utils/            # Utility functions
+├── tb_data/
+│   ├── tb_input_features.dat
+│   └── tb_output_predictions.dat
+├── myproject_test.cpp         # Testbench
+├── Makefile                   # Build system
+├── myproject-fpga             # Executable (after build)
+└── reports/                   # Synthesis reports
+    ├── report.html
+    └── lib/
+```
+
+## Precision Types
+
+Quartus backend uses Algorithmic C (AC) datatypes:
+
+```python
+# Fixed-point: ac_fixed<width, int_width, signed>
+config['layer']['Precision'] = 'ac_fixed<16,6,true>'
+config['layer']['accum_t'] = 'ac_fixed<24,12,true>'
+
+# Integer: ac_int<width, signed>
+config['layer']['index_t'] = 'ac_int<8,false>'
+```
+
+### Common Precision Settings
+
+| Type | AC Datatype | Description |
+|------|-------------|-------------|
+| Input | `ac_fixed<16,6,true>` | 16-bit, 6 integer bits, signed |
+| Weights | `ac_fixed<8,3,true>` | 8-bit quantized weights |
+| Accumulator | `ac_fixed<24,12,true>` | Wide accumulator |
+| Activation | `ac_fixed<16,6,true>` | Activation output |
+
+## Performance Optimization
+
+### Reuse Factor Strategy
+
+```python
+# All layers use Resource strategy
+# Reuse factor controls parallelism
+
+# More parallel, higher resources
+config['dense']['ReuseFactor'] = 1
+
+# More serial, lower resources
+config['dense']['ReuseFactor'] = 64
+```
+
+### Weight Storage Optimization
+
+```python
+# Store weights in LUTs (default)
+config['dense']['BramFactor'] = 0
+
+# Store weights in BRAM
+config['dense']['BramFactor'] = 1000  # Threshold in elements
+```
+
+### Winograd Convolution
+
+For 3x3 convolutions, Winograd can reduce operations:
+
+```python
+config['conv2d'] = {
+    'Implementation': 'Winograd',  # Faster for 3x3
+    'ReuseFactor': 8
+}
+```
+
+## Performance Characteristics
+
+### Resource Usage Estimates
+
+**Small MLP (3 layers, 64 neurons):**
+- ALMs: 5K-15K
+- DSPs: 10-30
+- M20K: 10-50
+
+**Small CNN (3 conv + 2 dense):**
+- ALMs: 30K-100K
+- DSPs: 50-200
+- M20K: 50-200
+
+### Latency Characteristics
+
+```
+Latency = Σ(layer_operations / parallel_factor)
+
+For Dense layer:
+  operations = n_in × n_out
+  parallel_factor = n_in × n_out / reuse_factor
+  
+For Conv2D layer:
+  operations = out_h × out_w × filt_h × filt_w × n_chan × n_filt
+  parallel_factor depends on implementation
+```
+
+### Clock Frequencies
+
+- **Arria 10**: 200-300 MHz typical
+- **Stratix 10**: 300-400 MHz typical
+- **Agilex**: 300-450 MHz typical
+
+## Activation Functions
+
+<Warning>
+  The Quartus backend uses `dense_tanh` instead of standard `tanh` for compatibility with the AC datatype library.
+</Warning>
+
+This substitution happens automatically:
+```python
+# Keras model uses tanh
+Dense(64, activation='tanh')
+
+# Quartus backend converts to dense_tanh internally
+```
+
+## Limitations
+
+### Resource Strategy Only
+
+```python
+# ✅ Supported
+config['layer']['Strategy'] = 'Resource'
+
+# ❌ Not supported
+config['layer']['Strategy'] = 'Latency'  # Will fail
+config['layer']['Strategy'] = 'Compressed'  # Not available
+```
+
+### io_stream Limitations
+
+- Limited support compared to oneAPI
+- No automatic FIFO optimization
+- Streaming between layers is basic
+
+### Softmax Constraints
+
+For `io_parallel` mode:
+```python
+# Softmax only works on 1D tensors
+model.add(Flatten())  # Required before Softmax
+model.add(Dense(10, activation='softmax'))
+```
+
+## Migration to oneAPI
+
+To migrate from Quartus to oneAPI backend:
+
+```python
+# Change backend specification
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    backend='oneAPI',  # Changed from 'Quartus'
+    output_dir='my_oneapi_project',
+    part='Agilex7'
+)
+```
+
+### Migration Considerations
+
+<AccordionGroup>
+  <Accordion title="Configuration changes">
+    - `part` parameter: Use device family name (e.g., 'Agilex7')
+    - Precision types: AC datatypes remain compatible
+    - Strategy: Still only Resource supported
+    - BramFactor: Not yet supported in oneAPI
+  </Accordion>
+
+  <Accordion title="Build system changes">
+    - Makefile → CMake build system
+    - `i++` compiler → `icpx` (Intel oneAPI DPC++ compiler)
+    - Different build targets: `fpga_emu`, `report`, `fpga_sim`, `fpga`
+  </Accordion>
+
+  <Accordion title="Feature differences">
+    **Not yet in oneAPI:**
+    - Profiling
+    - Tracing
+    - BramFactor
+    
+    **Better in oneAPI:**
+    - io_stream support
+    - Task parallelism
+    - Python integration
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Intel HLS compiler not found">
+    ```bash
+    # Check installation
+    which i++
+    
+    # Source Intel HLS environment
+    source /opt/intelFPGA_pro/hls/init_hls.sh
+    
+    # Verify version
+    i++ --version
+    ```
+  </Accordion>
+
+  <Accordion title="Compilation fails with area error">
+    If the design exceeds device resources:
+    ```python
+    # Build with override flag
+    report = hls_model.build(
+        synth=True,
+        cont_if_large_area=True  # Continue despite area estimate
+    )
+    ```
+    Then optimize:
+    - Increase reuse factors
+    - Reduce precision
+    - Use BramFactor for weights
+  </Accordion>
+
+  <Accordion title="Latency strategy not supported error">
+    ```python
+    # ❌ This will fail:
+    config['layer']['Strategy'] = 'Latency'
+    
+    # ✅ Use Resource strategy:
+    config['layer']['Strategy'] = 'Resource'
+    config['layer']['ReuseFactor'] = 1  # For maximum parallelism
+    ```
+  </Accordion>
+
+  <Accordion title="Softmax dimension error">
+    ```python
+    # ❌ Multi-dimensional Softmax in io_parallel
+    model.add(Dense(10, activation='softmax'))  # After Conv2D
+    
+    # ✅ Flatten before Softmax
+    model.add(Flatten())
+    model.add(Dense(10, activation='softmax'))
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Example: Complete Workflow
+
+```python
+import hls4ml
+from tensorflow import keras
+import numpy as np
+
+# Load model
+model = keras.models.load_model('my_model.h5')
+
+# Create configuration
+config = hls4ml.utils.config_from_keras_model(model, granularity='name')
+config['Model']['Strategy'] = 'Resource'
+config['Model']['ReuseFactor'] = 32
+
+# Set precision
+for layer in config['LayerName'].keys():
+    config['LayerName'][layer]['Precision'] = 'ac_fixed<16,6,true>'
+
+# Convert to Quartus HLS
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='quartus_prj',
+    backend='Quartus',
+    part='Arria10',
+    clock_period=5,
+    io_type='io_parallel'
+)
+
+# Compile and test
+hls_model.compile()
+X_test = np.random.rand(100, 784)
+y_keras = model.predict(X_test)
+y_hls = hls_model.predict(X_test)
+
+print(f"Accuracy match: {np.allclose(y_keras, y_hls, atol=1e-2)}")
+
+# Build HLS project
+report = hls_model.build(
+    synth=True,
+    fpgasynth=False,  # Set True for full FPGA compile
+    log_level=1
+)
+
+print(f"Estimated resources: ALM={report['ALM']}, DSP={report['DSP']}")
+print(f"Estimated latency: {report['Latency']} cycles")
+```
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="oneAPI Backend" icon="forward" href="/backends/oneapi">
+    Modern Intel FPGA backend
+  </Card>
+  <Card title="Model Conversion" icon="arrows-left-right" href="/concepts/model-conversion">
+    Learn about model conversion
+  </Card>
+  <Card title="Resource Optimization" icon="sliders" href="/advanced/optimization">
+    Reduce resource usage
+  </Card>
+  <Card title="Precision Guide" icon="bullseye" href="/concepts/precision-optimization">
+    Configure numeric precision
+  </Card>
+</CardGroup>

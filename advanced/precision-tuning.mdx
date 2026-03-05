@@ -1,0 +1,560 @@
+---
+title: Precision Tuning
+description: Advanced precision configuration and automatic inference techniques
+---
+
+Precision configuration is critical for balancing resource utilization and model accuracy in FPGA implementations. hls4ml provides both automatic and manual precision tuning capabilities.
+
+## Precision Types
+
+hls4ml supports multiple precision types for fixed-point arithmetic:
+
+### FixedPrecisionType
+
+Standard fixed-point representation:
+
+```python
+from hls4ml.model.types import FixedPrecisionType
+
+# ap_fixed<16,6> - 16 total bits, 6 integer bits (including sign)
+precision = FixedPrecisionType(width=16, integer=6, signed=True)
+
+# Equivalent to: 10 fractional bits, 1 sign bit, 5 integer bits
+# Range: [-32, 31.999...]
+# Resolution: 2^-10 ≈ 0.00098
+```
+
+### IntegerPrecisionType
+
+Integer-only (no fractional bits):
+
+```python
+from hls4ml.model.types import IntegerPrecisionType
+
+# ap_int<8> or ap_uint<8>
+signed_int = IntegerPrecisionType(width=8, signed=True)    # -128 to 127
+unsigned_int = IntegerPrecisionType(width=8, signed=False)  # 0 to 255
+```
+
+### ExponentPrecisionType
+
+Power-of-2 representation (for po2 quantization):
+
+```python
+from hls4ml.model.types import ExponentPrecisionType
+
+# Values are 2^n
+po2_precision = ExponentPrecisionType(width=8, signed=True)
+```
+
+### XnorPrecisionType
+
+Binary representation for XNOR operations:
+
+```python
+from hls4ml.model.types import XnorPrecisionType
+
+# Single-bit binary {0, 1} for XNOR networks
+xnor_precision = XnorPrecisionType()
+```
+
+## Automatic Precision Inference
+
+The `InferPrecisionTypes` optimizer pass automatically calculates appropriate precision:
+
+```python
+import hls4ml
+
+config = hls4ml.utils.config_from_keras_model(
+    model,
+    granularity='name',
+    default_precision='ap_fixed<16,6>'
+)
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='auto_precision'
+)
+
+# Precision is automatically inferred for intermediate layers
+```
+
+### How Inference Works
+
+<Steps>
+  <Step title="Analyze input precision">
+    Start with user-defined or quantizer-specified input precision.
+  </Step>
+  
+  <Step title="Propagate through operations">
+    Calculate required precision for each operation based on:
+    - Input bit-widths
+    - Weight bit-widths
+    - Operation type (multiplication, addition, etc.)
+    - Number of accumulations
+  </Step>
+  
+  <Step title="Apply maximum precision limits">
+    If `maximum` precision is specified in config, constrain inferred precision.
+  </Step>
+  
+  <Step title="Avoid overflow and underflow">
+    Ensure sufficient integer bits to prevent overflow and fractional bits to maintain resolution.
+  </Step>
+</Steps>
+
+### Precision Inference Example
+
+For a Dense layer with:
+- Input: `ap_fixed<8,3>` (8 bits, 3 integer)
+- Weights: `ap_fixed<8,3>`
+- Bias: `ap_fixed<8,3>`
+- 128 neurons (n_in = 128)
+
+Inferred accumulator precision:
+```python
+# Bitwidth = input_width + weight_width + ceil(log2(n_ops))
+bitwidth = 8 + 8 + ceil(log2(128)) = 8 + 8 + 7 = 23
+
+# Integer = input_int + weight_int + ceil(log2(n_ops))
+integer = 3 + 3 + 7 = 13
+
+# Result: ap_fixed<23,13> for accumulator
+```
+
+## Maximum Precision Configuration
+
+Limit inferred precision to control resource usage:
+
+```python
+config = hls4ml.utils.config_from_keras_model(
+    model,
+    default_precision='ap_fixed<16,6>'
+)
+
+# Set maximum precision
+config['Model']['Precision'] = {
+    'default': 'ap_fixed<16,6>',
+    'maximum': 'ap_fixed<32,16>'  # Cap all inferred precision
+}
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='max_precision'
+)
+```
+
+<Warning>
+  Maximum precision limiting can cause overflow if set too aggressively. Always verify with C simulation.
+</Warning>
+
+## Manual Precision Configuration
+
+Override automatic inference with explicit precision:
+
+### Layer-Level Precision
+
+```python
+config = hls4ml.utils.config_from_keras_model(
+    model,
+    granularity='name'
+)
+
+# Set precision for specific layer
+config['LayerName']['fc1'] = {
+    'Precision': {
+        'weight': 'ap_fixed<8,3>',
+        'bias': 'ap_fixed<8,3>',
+        'result': 'ap_fixed<16,6>',
+        'accum': 'ap_fixed<24,12>'
+    }
+}
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='manual_precision'
+)
+```
+
+### Type-Level Precision
+
+```python
+# Set precision by layer type
+config['LayerType']['Dense'] = {
+    'Precision': {
+        'weight': 'ap_fixed<6,2>',
+        'bias': 'ap_fixed<6,2>',
+        'result': 'ap_fixed<12,4>'
+    }
+}
+```
+
+## Rounding and Saturation Modes
+
+Control how values are rounded and saturated:
+
+```python
+from hls4ml.model.types import FixedPrecisionType, RoundingMode, SaturationMode
+
+precision = FixedPrecisionType(
+    width=16,
+    integer=6,
+    signed=True,
+    rounding_mode=RoundingMode.TRN,        # Truncate (default)
+    saturation_mode=SaturationMode.WRAP,   # Wrap around (default)
+    saturation_bits=0
+)
+```
+
+### Rounding Modes
+
+<Tabs>
+  <Tab title="TRN (Truncate)">
+    ```python
+    rounding_mode=RoundingMode.TRN
+    ```
+    Fastest. Simply drops fractional bits. Can introduce negative bias.
+  </Tab>
+  
+  <Tab title="RND (Round)">
+    ```python
+    rounding_mode=RoundingMode.RND
+    ```
+    Round to nearest. Adds 0.5 and truncates. More accurate than TRN.
+  </Tab>
+  
+  <Tab title="RND_ZERO">
+    ```python
+    rounding_mode=RoundingMode.RND_ZERO
+    ```
+    Round towards zero.
+  </Tab>
+  
+  <Tab title="RND_INF">
+    ```python
+    rounding_mode=RoundingMode.RND_INF
+    ```
+    Round towards infinity.
+  </Tab>
+  
+  <Tab title="RND_CONV">
+    ```python
+    rounding_mode=RoundingMode.RND_CONV
+    ```
+    Convergent rounding (banker's rounding).
+  </Tab>
+</Tabs>
+
+### Saturation Modes
+
+<Tabs>
+  <Tab title="WRAP">
+    ```python
+    saturation_mode=SaturationMode.WRAP
+    ```
+    Wrap around on overflow (fastest, default). Can cause severe errors.
+  </Tab>
+  
+  <Tab title="SAT">
+    ```python
+    saturation_mode=SaturationMode.SAT
+    ```
+    Saturate to maximum/minimum value. Safer but uses more resources.
+  </Tab>
+  
+  <Tab title="SAT_ZERO">
+    ```python
+    saturation_mode=SaturationMode.SAT_ZERO
+    ```
+    Saturate to zero on overflow.
+  </Tab>
+  
+  <Tab title="SAT_SYM">
+    ```python
+    saturation_mode=SaturationMode.SAT_SYM
+    ```
+    Symmetric saturation. Minimum is -(max-1) instead of -max.
+  </Tab>
+</Tabs>
+
+## Bit-Exact Precision Inference
+
+For properly quantized models (QKeras, HGQ), use bit-exact inference:
+
+```python
+config = hls4ml.utils.config_from_keras_model(
+    qkeras_model,
+    granularity='name'
+)
+
+# Enable bit-exact inference (automatic for QKeras)
+config['HLSConfig']['Model']['Precision'] = {
+    'bit_exact': True
+}
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    qkeras_model,
+    hls_config=config,
+    output_dir='bit_exact'
+)
+```
+
+<Info>
+  Bit-exact inference is automatically enabled for QKeras and HGQ models. It ignores user-defined precision and trusts the quantizers.
+</Info>
+
+### Requirements for Bit-Exact
+
+<Check>
+  - Quantizers between **all** layers with non-trivial operations
+</Check>
+<Check>
+  - Input quantization explicitly defined (QActivation as first layer)
+</Check>
+<Check>
+  - All operations supported by bit-exact pass
+</Check>
+
+<Warning>
+  Bit-exact inference will crash if it encounters unsupported operations or missing quantizers. Use automatic inference instead for unquantized models.
+</Warning>
+
+## Precision Profiling
+
+Use profiling to guide precision choices:
+
+```python
+from hls4ml.model.profiling import numerical
+import matplotlib.pyplot as plt
+
+# Profile with test data
+wp, wph, ap, aph = numerical(model=model, hls_model=hls_model, X=X_test)
+
+# Grey boxes show current precision ranges
+plt.show()
+```
+
+Interpret profiling results:
+
+<Tabs>
+  <Tab title="Weights">
+    - Box-and-whisker shows weight value distribution
+    - Grey box shows representable range with current precision
+    - If whiskers extend beyond grey box: increase precision
+    - If grey box much larger than whiskers: can reduce precision
+  </Tab>
+  
+  <Tab title="Activations">
+    - Shows layer output value distributions
+    - More critical than weights (errors propagate)
+    - Ensure grey boxes fully contain whiskers
+    - Consider headroom for variations in test data
+  </Tab>
+</Tabs>
+
+## Advanced Precision Techniques
+
+### Heterogeneous Precision
+
+Use different precision for different parts of the network:
+
+```python
+config = hls4ml.utils.config_from_keras_model(model, granularity='name')
+
+# Early layers: higher precision (processing raw inputs)
+config['LayerName']['conv1']['Precision'] = {
+    'result': 'ap_fixed<16,6>'
+}
+
+# Middle layers: medium precision
+config['LayerName']['conv2']['Precision'] = {
+    'result': 'ap_fixed<12,4>'
+}
+
+# Late layers: lower precision (features already extracted)
+config['LayerName']['fc1']['Precision'] = {
+    'result': 'ap_fixed<8,3>'
+}
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model, hls_config=config, output_dir='heterogeneous'
+)
+```
+
+### Accumulator Precision Tuning
+
+Carefully control accumulator precision to balance accuracy and resources:
+
+```python
+# Dense layer with 512 inputs
+config['LayerName']['fc_large'] = {
+    'Precision': {
+        'weight': 'ap_fixed<8,3>',
+        'bias': 'ap_fixed<8,3>',
+        # Large accumulator for many additions
+        'accum': 'ap_fixed<32,16>',
+        # Smaller result after activation
+        'result': 'ap_fixed<16,6>'
+    }
+}
+```
+
+### Dynamic Precision Selection
+
+Automatically tune precision based on profiling:
+
+```python
+from hls4ml.model.profiling import weights_hlsmodel, types_hlsmodel
+import numpy as np
+
+def calculate_required_precision(data):
+    """Calculate minimum precision from data distribution"""
+    max_val = np.max(np.abs(data))
+    integer_bits = int(np.ceil(np.log2(max_val + 1))) + 1  # +1 for sign
+    
+    # Target resolution: 1/256 of max value
+    fractional_bits = int(np.ceil(np.log2(256)))
+    
+    total_bits = integer_bits + fractional_bits
+    return f'ap_fixed<{total_bits},{integer_bits}>'
+
+# Get weight statistics
+weight_data = weights_hlsmodel(hls_model)
+
+# Analyze and update precision
+for layer_name, weights in weight_data.items():
+    required = calculate_required_precision(weights)
+    config['LayerName'][layer_name]['Precision']['weight'] = required
+```
+
+## Precision for Different Backends
+
+### Vivado/Vitis
+
+```python
+# Standard ap_fixed notation
+config['Model']['Precision'] = {
+    'default': 'ap_fixed<16,6>',
+    'maximum': 'ap_fixed<32,16>'
+}
+```
+
+### Quartus
+
+```python
+# Uses ac_fixed (same semantics)
+config['Model']['Precision'] = {
+    'default': 'ac_fixed<16,6,true>',  # width, integer, signed
+}
+```
+
+### Catapult
+
+```python
+# ac_fixed format
+config['Model']['Precision'] = {
+    'default': 'ac_fixed<16,6,true>'
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Start with profiling">
+    Always profile your model with representative test data before manually tuning precision. This provides data-driven guidance.
+  </Accordion>
+  
+  <Accordion title="Use automatic inference first">
+    Let hls4ml infer precision automatically, then selectively override problem layers identified through C simulation.
+  </Accordion>
+  
+  <Accordion title="Prioritize activation precision">
+    Activation precision is more critical than weight precision since errors propagate. Ensure activations don't overflow.
+  </Accordion>
+  
+  <Accordion title="Test with C simulation">
+    After changing precision, always run C simulation with diverse test data to catch overflow/underflow issues.
+  </Accordion>
+  
+  <Accordion title="Consider accumulator precision">
+    Layers with many accumulations (large Dense, Conv) need higher accumulator precision to avoid overflow.
+  </Accordion>
+  
+  <Accordion title="Use saturation in critical paths">
+    For layers where overflow could be catastrophic, use SAT mode despite the resource cost.
+  </Accordion>
+  
+  <Accordion title="Document precision choices">
+    Keep notes on why specific precision was chosen for each layer. This helps future debugging and tuning.
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="C simulation results differ from Keras">
+    - Check for overflow: increase integer bits
+    - Check for underflow: increase fractional bits
+    - Profile activations to see actual value ranges
+    - Try increasing precision incrementally
+  </Accordion>
+  
+  <Accordion title="High resource utilization">
+    - Review profiling: are you using more precision than needed?
+    - Set maximum precision to cap inferred types
+    - Use heterogeneous precision: reduce precision in less critical layers
+    - Consider lower precision for middle layers
+  </Accordion>
+  
+  <Accordion title="Overflow warnings in synthesis">
+    - Increase integer bits in affected layers
+    - Use SAT saturation mode instead of WRAP
+    - Review accumulator precision for layers with many operations
+  </Accordion>
+  
+  <Accordion title="Bit-exact inference fails">
+    - Ensure quantizers between all layers
+    - Add QActivation as first layer for input quantization
+    - Check that all operations are supported
+    - Fall back to automatic inference if needed
+  </Accordion>
+</AccordionGroup>
+
+## API Reference
+
+### FixedPrecisionType
+
+```python
+hls4ml.model.types.FixedPrecisionType(
+    width,          # Total bits
+    integer,        # Integer bits (including sign)
+    signed=True,
+    rounding_mode=RoundingMode.TRN,
+    saturation_mode=SaturationMode.WRAP,
+    saturation_bits=0
+)
+```
+
+### IntegerPrecisionType
+
+```python
+hls4ml.model.types.IntegerPrecisionType(
+    width,          # Total bits
+    signed=True
+)
+```
+
+### InferPrecisionTypes Pass
+
+```python
+from hls4ml.model.optimizer.passes.infer_precision import InferPrecisionTypes
+
+# Automatically applied during conversion
+# Can be configured:
+pass_config = {
+    'infer_no_bias': False  # Assume zero bias for tighter bounds
+}
+```

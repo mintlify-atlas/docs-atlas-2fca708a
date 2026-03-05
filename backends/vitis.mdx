@@ -1,0 +1,472 @@
+---
+title: 'Vitis Backend'
+description: 'Deploy neural networks on AMD/Xilinx FPGAs using Vitis HLS'
+icon: 'microchip'
+---
+
+## Overview
+
+The **Vitis** backend enables deployment of neural networks on AMD/Xilinx FPGAs using the Vitis HLS compiler. It is the recommended backend for new AMD/Xilinx FPGA projects, replacing the discontinued Vivado HLS compiler.
+
+### When to Use Vitis Backend
+
+- **New AMD/Xilinx FPGA projects**: Modern toolchain with active development
+- **Latest FPGA devices**: Support for Versal, UltraScale+, and newer devices
+- **Advanced features**: Access to latest hls4ml optimizations and features
+- **IP integration**: Generate IP cores for Vivado designs
+
+<Note>
+  The Vitis backend inherits most functionality from the Vivado backend but includes additional validation passes and optimizations for the Vitis HLS toolchain.
+</Note>
+
+## Installation and Setup
+
+### Prerequisites
+
+- **Vitis HLS** 2020.1 or later (ensure `vitis-run` is on PATH)
+- AMD/Xilinx Vitis development tools
+- Python 3.8 or higher
+- hls4ml library installed
+
+### Environment Setup
+
+```bash
+# Verify Vitis is available
+command -v vitis-run
+
+# Source Vitis settings (adjust path for your installation)
+source /tools/Xilinx/Vitis/<version>/settings64.sh
+```
+
+## Configuration
+
+### Basic Configuration
+
+Create a model configuration for the Vitis backend:
+
+```python
+import hls4ml
+
+config = hls4ml.utils.config_from_keras_model(
+    model,
+    granularity='name',
+    backend='Vitis'
+)
+
+# Convert model
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='my_vitis_project',
+    backend='Vitis',
+    part='xcvu13p-flga2577-2-e',
+    clock_period=5,
+    io_type='io_parallel'
+)
+```
+
+### Configuration Options
+
+The Vitis backend supports the following configuration parameters:
+
+<ParamField path="part" type="string" default="xcvu13p-flga2577-2-e">
+  FPGA part number to target (UltraScale+, Versal, etc.)
+</ParamField>
+
+<ParamField path="clock_period" type="int" default="5">
+  Clock period in nanoseconds (5ns = 200MHz)
+</ParamField>
+
+<ParamField path="clock_uncertainty" type="string" default="27%">
+  Clock uncertainty percentage (higher than Vivado default)
+</ParamField>
+
+<ParamField path="io_type" type="string" default="io_parallel">
+  I/O implementation type:
+  - `io_parallel`: Parallel processing of all data
+  - `io_stream`: Streaming dataflow architecture
+</ParamField>
+
+<ParamField path="namespace" type="string" default="None">
+  Optional C++ namespace for generated code
+</ParamField>
+
+<ParamField path="write_weights_txt" type="bool" default="true">
+  Write weights to .txt files for faster compilation
+</ParamField>
+
+<ParamField path="write_tar" type="bool" default="false">
+  Compress output directory into .tar.gz file
+</ParamField>
+
+<ParamField path="write_emulation_constants" type="bool" default="false">
+  Write constants to define.h for emulation support
+</ParamField>
+
+### Vitis-Specific Validation
+
+The Vitis backend includes validation passes that check:
+
+```python
+# Automatic validation checks:
+# - Conv implementation compatibility
+# - Resource strategy constraints
+# - Resource_unrolled strategy validation
+# - Bidirectional layer merge mode
+# - Bidirectional I/O type compatibility
+# - Standard C++ types usage
+```
+
+### Layer Configuration
+
+#### Dense Layers
+
+```python
+config['dense_layer'] = {
+    'ReuseFactor': 16,
+    'Strategy': 'Resource',  # 'Latency', 'Resource', 'Resource_Unrolled'
+    'Precision': 'ap_fixed<16,6>',
+    'accum_t': 'ap_fixed<24,12>'
+}
+```
+
+#### Convolutional Layers
+
+```python
+config['conv2d_layer'] = {
+    'ReuseFactor': 8,
+    'Strategy': 'Resource',
+    'ParallelizationFactor': 4,
+    'ConvImplementation': 'LineBuffer',  # or 'Encoded'
+    'Precision': 'ap_fixed<16,6>'
+}
+```
+
+#### Recurrent Layers
+
+```python
+config['lstm_layer'] = {
+    'ReuseFactor': 1,
+    'RecurrentReuseFactor': 1,
+    'Strategy': 'Resource',
+    'static': True,  # Static loop implementation
+    'table_size': 1024,
+    'table_t': 'ap_fixed<18,8>'
+}
+```
+
+## Build Process
+
+### Synthesis Commands
+
+```python
+# Compile the model
+hls_model.compile()
+
+# Build with Vitis HLS
+report = hls_model.build(
+    reset=False,       # Reset project
+    csim=True,         # C simulation
+    synth=True,        # HLS synthesis
+    cosim=False,       # RTL co-simulation
+    validation=False,  # Validation
+    export=False,      # Export IP
+    vsynth=False,      # Vivado synthesis
+    fifo_opt=False     # FIFO optimization
+)
+```
+
+### Build Options
+
+<Accordion title="Vitis Build Parameters">
+
+| Option | Description | Default |
+|--------|-------------|----------|
+| `reset` | Reset project before building | `False` |
+| `csim` | Run C simulation testbench | `True` |
+| `synth` | Run HLS synthesis | `True` |
+| `cosim` | Run RTL co-simulation | `False` |
+| `validation` | Run validation tests | `False` |
+| `export` | Export IP for Vivado integration | `False` |
+| `vsynth` | Run Vivado synthesis | `False` |
+| `fifo_opt` | Optimize FIFO depths | `False` |
+| `log_to_stdout` | Print build logs to stdout | `True` |
+
+</Accordion>
+
+### Build Script
+
+Vitis uses a different build flow than Vivado:
+
+```bash
+cd my_vitis_project
+vitis-run --tcl build_prj.tcl --mode hls
+```
+
+The build process generates logs:
+- `build_stdout.log` - Standard output
+- `build_stderr.log` - Error messages
+
+## Example Project Structure
+
+```
+my_vitis_project/
+├── firmware/
+│   ├── myproject.cpp          # Top-level implementation
+│   ├── myproject.h            # Header declarations
+│   ├── parameters.h           # Network parameters
+│   ├── defines.h              # Macro definitions
+│   ├── weights/               # Weight files
+│   └── nnet_utils/            # Utility functions
+├── tb_data/
+│   ├── tb_input_features.dat
+│   └── tb_output_predictions.dat
+├── myproject_test.cpp         # Testbench
+├── build_prj.tcl              # Vitis HLS script
+├── build_opt.tcl              # Build options
+├── build_stdout.log           # Build output
+├── build_stderr.log           # Build errors
+└── proj_myproject/            # Vitis HLS project
+    ├── solution1/
+    │   ├── syn/
+    │   │   └── report/        # Synthesis reports
+    │   ├── impl/              # Implementation
+    │   └── .autopilot/        # Vitis metadata
+    └── vitis_hls.log
+```
+
+## Advanced Features
+
+### Stitched Design Flow
+
+For partitioned large models:
+
+```python
+# Build individual graph components
+for graph in model.graphs:
+    graph_report = graph.build(synth=True, export=True)
+
+# Stitch together into complete design
+stitched_report = model.build_stitched_design(
+    stitch_design=True,
+    sim_stitched_design=True,
+    export_stitched_design=True,
+    simulation_input_data=X_test
+)
+```
+
+### Streaming Architecture
+
+Optimize for throughput with streaming:
+
+```python
+config['Model']['IOType'] = 'io_stream'
+config['Model']['Strategy'] = 'Resource'
+
+# Build and optimize FIFOs
+report = hls_model.build(fifo_opt=True)
+```
+
+### Custom Pragmas
+
+Vitis supports advanced HLS pragmas:
+
+```python
+# These are applied automatically based on strategy
+# - DATAFLOW for streaming designs
+# - PIPELINE for latency optimization
+# - ARRAY_PARTITION for parallel access
+```
+
+## Performance Optimization
+
+### Resource vs Latency Tradeoff
+
+```python
+# Low latency, high resources
+config['Model']['Strategy'] = 'Latency'
+config['LayerName']['ReuseFactor'] = 1
+
+# Balanced
+config['Model']['Strategy'] = 'Resource'
+config['LayerName']['ReuseFactor'] = 8
+
+# Low resources, higher latency
+config['Model']['Strategy'] = 'Resource'
+config['LayerName']['ReuseFactor'] = 64
+```
+
+### Precision Tuning
+
+```python
+# Use hls4ml profiling to determine optimal precision
+trace = hls_model.trace(X_test)
+
+# Apply precision recommendations
+optimal_config = hls4ml.utils.get_optimal_precision(
+    model, trace, target_precision='auto'
+)
+```
+
+### Clock Frequency Optimization
+
+```python
+# Start conservative
+clock_period = 10  # 100 MHz
+
+# Gradually reduce for higher performance
+clock_period = 5   # 200 MHz
+clock_period = 4   # 250 MHz
+
+# Monitor timing reports and adjust
+```
+
+## Performance Characteristics
+
+### Typical Resource Usage
+
+**Small MLP (3 layers, 64 neurons):**
+- LUTs: 5K-15K
+- FFs: 3K-10K
+- DSPs: 10-30
+- BRAM: 5-20
+
+**CNN (5 conv layers + 2 dense):**
+- LUTs: 50K-200K
+- FFs: 30K-150K
+- DSPs: 100-500
+- BRAM: 50-300
+
+### Latency Patterns
+
+**io_parallel:**
+```
+Latency = Σ(layer_latency × reuse_factor)
+II = 1 (for pipelined designs)
+```
+
+**io_stream:**
+```
+Throughput = 1 / max(layer_II)
+End-to-end latency = Σ(layer_latency)
+```
+
+### Achievable Frequencies
+
+- **Versal devices**: 300-500 MHz
+- **UltraScale+**: 200-350 MHz
+- **Older devices**: 150-250 MHz
+
+## Differences from Vivado Backend
+
+| Feature | Vivado | Vitis |
+|---------|--------|-------|
+| Compiler | vivado_hls | vitis-run |
+| Clock Uncertainty | 12.5% | 27% |
+| Validation Passes | Basic | Enhanced |
+| Build Command | TCL args | Separate config file |
+| Log Management | Single log | stdout/stderr logs |
+| FIFO Optimization | Supported | Enhanced support |
+| Emulation Constants | Not supported | Supported |
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Vitis installation not found">
+    ```bash
+    # Check Vitis installation
+    which vitis-run
+    
+    # Source Vitis environment
+    source /tools/Xilinx/Vitis/2023.1/settings64.sh
+    
+    # Verify version
+    vitis-run --version
+    ```
+  </Accordion>
+
+  <Accordion title="Build failed with validation errors">
+    The Vitis backend includes strict validation:
+    - Check that `Resource_Unrolled` strategy is only used with `io_stream`
+    - Verify `Bidirectional` layers use compatible merge modes
+    - Ensure no unsupported C++ types in layer configurations
+  </Accordion>
+
+  <Accordion title="Timing closure issues">
+    - Increase clock period (reduce frequency)
+    - Increase clock uncertainty tolerance
+    - Increase reuse factors
+    - Reduce precision where possible
+    - Review synthesis reports for critical paths
+  </Accordion>
+
+  <Accordion title="High resource usage">
+    - Use `io_stream` for large models
+    - Increase reuse factors
+    - Enable BRAM for weights
+    - Use resource strategy instead of latency
+    - Consider model pruning/quantization
+  </Accordion>
+</AccordionGroup>
+
+## Example: Complete Workflow
+
+```python
+import hls4ml
+from tensorflow import keras
+import numpy as np
+
+# Load model
+model = keras.models.load_model('my_model.h5')
+
+# Create configuration
+config = hls4ml.utils.config_from_keras_model(model, granularity='name')
+config['Model']['Strategy'] = 'Resource'
+config['Model']['ReuseFactor'] = 16
+
+# Convert to Vitis HLS
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='vitis_prj',
+    backend='Vitis',
+    part='xcvu9p-flga2104-2L-e',
+    clock_period=5,
+    io_type='io_parallel'
+)
+
+# Compile and build
+hls_model.compile()
+X_test = np.random.rand(100, 784)
+y_keras = model.predict(X_test)
+y_hls = hls_model.predict(X_test)
+
+# Build HLS project
+report = hls_model.build(
+    csim=True,
+    synth=True,
+    cosim=False,
+    export=True
+)
+
+print(f"Latency: {report['LatencyBest']} - {report['LatencyWorst']} cycles")
+print(f"II: {report['II']}")
+print(f"Resources: LUT={report['LUT']}, FF={report['FF']}, DSP={report['DSP']}, BRAM={report['BRAM']}")
+```
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Vivado Backend" icon="backward" href="/backends/vivado">
+    Legacy Vivado HLS backend
+  </Card>
+  <Card title="Optimization Guide" icon="gauge-high" href="/advanced/optimization">
+    Performance tuning strategies
+  </Card>
+  <Card title="FIFO Depth" icon="water" href="/advanced/fifo-depth">
+    Optimize streaming dataflow
+  </Card>
+  <Card title="Profiling & Tracing" icon="chart-line" href="/advanced/profiling">
+    Analyze model performance
+  </Card>
+</CardGroup>

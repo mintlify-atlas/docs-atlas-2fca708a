@@ -1,0 +1,472 @@
+---
+title: 'Keras Frontend'
+description: 'Convert Keras/TensorFlow models to FPGA firmware with hls4ml'
+---
+
+The Keras frontend enables conversion of Keras and TensorFlow models to optimized FPGA firmware. It supports both Keras v2 (TensorFlow 2.x) and Keras v3 models.
+
+## Conversion Function
+
+### convert_from_keras_model()
+
+The primary function for converting Keras models to hls4ml.
+
+```python python
+import hls4ml
+from tensorflow import keras
+
+# Load or define your Keras model
+model = keras.models.load_model('my_model.h5')
+
+# Convert to hls4ml
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    output_dir='my-hls-test',
+    project_name='myproject',
+    backend='Vivado',
+    io_type='io_parallel',
+    hls_config={'Model': {'Precision': 'ap_fixed<16,6>', 'ReuseFactor': 1}}
+)
+```
+
+#### Parameters
+
+<ParamField path="model" type="keras.Model" required>
+  Keras model instance to convert. Can be a Sequential or Functional model.
+</ParamField>
+
+<ParamField path="output_dir" type="str" default="my-hls-test">
+  Output directory for the generated HLS project.
+</ParamField>
+
+<ParamField path="project_name" type="str" default="myproject">
+  Name of the HLS project.
+</ParamField>
+
+<ParamField path="backend" type="str" default="Vivado">
+  Backend to use for HLS synthesis. Options: 'Vivado', 'Vitis', 'Quartus', 'Catapult'.
+</ParamField>
+
+<ParamField path="io_type" type="str" default="io_parallel">
+  I/O implementation type. Options: 'io_parallel', 'io_stream'.
+</ParamField>
+
+<ParamField path="hls_config" type="dict" default="None">
+  Configuration dictionary for HLS conversion. Should include:
+  - `Model`: Dictionary with `Precision` and `ReuseFactor`
+  - `LayerName`: Per-layer configuration (optional)
+  - `LayerType`: Per-layer-type configuration (optional)
+</ParamField>
+
+<ParamField path="part" type="str" default="None">
+  Target FPGA part number (e.g., 'xcvu9p-flgb2104-2-i').
+</ParamField>
+
+<ParamField path="clock_period" type="int" default="5">
+  Clock period in nanoseconds.
+</ParamField>
+
+<ParamField path="bit_exact" type="bool" default="None">
+  Enable model-wise precision propagation with fixed-point types only.
+</ParamField>
+
+<ParamField path="allow_v2_fallback" type="bool" default="True">
+  Allow fallback to Keras v2 handlers for unsupported layers (Keras v3 only).
+</ParamField>
+
+## Complete Example
+
+<CodeGroup>
+```python Sequential Model
+import numpy as np
+from tensorflow import keras
+from tensorflow.keras.layers import Dense, Activation
+import hls4ml
+
+# Create a simple sequential model
+model = keras.Sequential([
+    Dense(64, input_shape=(10,), name='dense1'),
+    Activation('relu', name='relu1'),
+    Dense(32, name='dense2'),
+    Activation('relu', name='relu2'),
+    Dense(3, name='output'),
+    Activation('softmax', name='softmax')
+])
+
+model.compile(optimizer='adam', loss='categorical_crossentropy')
+
+# Prepare test data
+X_test = np.random.rand(1000, 10)
+y_keras = model.predict(X_test)
+
+# Configure conversion
+config = hls4ml.utils.config_from_keras_model(model, granularity='name')
+config['Model']['Precision'] = 'ap_fixed<16,6>'
+config['Model']['ReuseFactor'] = 4
+
+# Convert to hls4ml
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='hls4ml_prj',
+    backend='Vivado',
+    io_type='io_stream'
+)
+
+# Compile and test
+hls_model.compile()
+y_hls = hls_model.predict(X_test)
+
+# Compare predictions
+print(f"Accuracy match: {np.mean(np.argmax(y_keras, axis=1) == np.argmax(y_hls, axis=1))}")
+```
+
+```python Functional Model
+import numpy as np
+from tensorflow import keras
+from tensorflow.keras.layers import Input, Dense, Add
+import hls4ml
+
+# Create a functional model with skip connections
+inputs = Input(shape=(16,), name='input')
+x = Dense(32, activation='relu', name='dense1')(inputs)
+y = Dense(32, activation='relu', name='dense2')(inputs)
+z = Add(name='add')([x, y])
+outputs = Dense(8, activation='softmax', name='output')(z)
+
+model = keras.Model(inputs=inputs, outputs=outputs)
+model.compile(optimizer='adam', loss='categorical_crossentropy')
+
+# Convert to hls4ml
+hls_config = {
+    'Model': {
+        'Precision': 'ap_fixed<16,6>',
+        'ReuseFactor': 1
+    }
+}
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=hls_config,
+    output_dir='functional_model_hls',
+    backend='Vivado'
+)
+
+hls_model.compile()
+```
+
+```python From H5 File
+import hls4ml
+
+# Convert directly from saved H5 file
+config = {
+    'KerasH5': 'path/to/model.h5',
+    'OutputDir': 'my-hls-test',
+    'ProjectName': 'myproject',
+    'Part': 'xcvu9p-flgb2104-2-i',
+    'ClockPeriod': 5,
+    'IOType': 'io_parallel',
+    'HLSConfig': {
+        'Model': {
+            'Precision': 'ap_fixed<16,6>',
+            'ReuseFactor': 10
+        }
+    }
+}
+
+hls_model = hls4ml.converters.convert_from_config(config)
+hls_model.compile()
+```
+</CodeGroup>
+
+## Supported Layers
+
+The Keras frontend supports a comprehensive set of layer types:
+
+### Core Layers
+- **Dense** - Fully connected layers
+- **BinaryDense** - Binary quantized dense layers
+- **TernaryDense** - Ternary quantized dense layers
+- **Activation** - Standard activation functions
+- **InputLayer** - Input specification
+- **Dropout** - Training-only layer (skipped during conversion)
+
+### Activation Layers
+- **ReLU** - Rectified Linear Unit
+- **LeakyReLU** - Leaky ReLU with configurable slope
+- **ELU** - Exponential Linear Unit
+- **PReLU** - Parametric ReLU
+- **ThresholdedReLU** - Thresholded activation
+- **Softmax** - Softmax activation
+- **Sigmoid** - Sigmoid activation
+- **Tanh** - Hyperbolic tangent
+- **HardActivation** - Hard sigmoid
+
+### Convolutional Layers
+- **Conv1D** - 1D convolution
+- **Conv2D** - 2D convolution
+- **DepthwiseConv1D** - Depthwise 1D convolution
+- **DepthwiseConv2D** - Depthwise 2D convolution
+- **SeparableConv1D** - Separable 1D convolution
+- **SeparableConv2D** - Separable 2D convolution
+
+### Pooling Layers
+- **MaxPooling1D** / **MaxPooling2D** - Max pooling
+- **AveragePooling1D** / **AveragePooling2D** - Average pooling
+- **GlobalAveragePooling1D** / **GlobalAveragePooling2D** - Global pooling
+- **GlobalMaxPooling1D** / **GlobalMaxPooling2D** - Global max pooling
+
+### Normalization Layers
+- **BatchNormalization** - Batch normalization
+- **LayerNormalization** - Layer normalization (Keras v3)
+
+### Recurrent Layers
+- **SimpleRNN** - Simple recurrent neural network
+- **LSTM** - Long Short-Term Memory
+- **GRU** - Gated Recurrent Unit
+- **Bidirectional** - Bidirectional wrapper for RNNs
+
+### Merge Layers
+- **Add** - Element-wise addition
+- **Subtract** - Element-wise subtraction
+- **Multiply** - Element-wise multiplication
+- **Average** - Element-wise averaging
+- **Maximum** - Element-wise maximum
+- **Minimum** - Element-wise minimum
+- **Concatenate** - Tensor concatenation
+- **Dot** - Dot product
+
+### Reshape Layers
+- **Flatten** - Flatten input
+- **Reshape** - Arbitrary reshaping
+- **Permute** - Dimension permutation
+- **ZeroPadding1D** / **ZeroPadding2D** - Zero padding
+- **UpSampling1D** / **UpSampling2D** - Upsampling
+- **RepeatVector** - Vector repetition
+
+### QKeras Support
+hls4ml has extensive support for QKeras quantized layers:
+- **QDense** - Quantized dense layers
+- **QConv1D** / **QConv2D** - Quantized convolutions
+- **QActivation** - Quantized activations
+- **QBatchNormalization** - Quantized batch normalization
+
+## Framework-Specific Configuration
+
+### Data Format
+Keras uses `channels_last` data format by default (e.g., `(batch, height, width, channels)`). hls4ml automatically handles this format.
+
+```python python
+# Keras model with channels_last (default)
+model = keras.Sequential([
+    Conv2D(32, (3, 3), input_shape=(28, 28, 1), data_format='channels_last'),
+    # ... rest of model
+])
+```
+
+### Layer Name Configuration
+
+Configure specific layers by name:
+
+```python python
+config = hls4ml.utils.config_from_keras_model(model, granularity='name')
+
+# Configure specific layer
+config['LayerName']['dense1'] = {
+    'Precision': 'ap_fixed<8,3>',
+    'ReuseFactor': 8
+}
+
+config['LayerName']['output'] = {
+    'Precision': 'ap_fixed<16,8>',
+    'Strategy': 'Stable'
+}
+```
+
+### Weights and Biases
+
+Weights are automatically extracted from the Keras model:
+
+```python python
+# Weights are read from the model automatically
+model = keras.models.load_model('trained_model.h5')
+hls_model = hls4ml.converters.convert_from_keras_model(model, hls_config=config)
+
+# Access layer weights in hls4ml
+for layer in hls_model.get_layers():
+    if hasattr(layer, 'get_weights'):
+        weights = layer.get_weights()
+        print(f"Layer {layer.name}: {weights['weight'].shape}")
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+<Accordion title="Unsupported Layer Type Error">
+If you encounter an unsupported layer error:
+
+1. Check if the layer is in the supported layers list above
+2. For Keras v3, enable fallback options:
+   ```python
+   hls_model = hls4ml.converters.convert_from_keras_model(
+       model,
+       allow_v2_fallback=True,
+       allow_da_fallback=True,
+       hls_config=config
+   )
+   ```
+3. Replace unsupported layers with supported alternatives
+4. Implement a custom layer handler (see Advanced Usage)
+</Accordion>
+
+<Accordion title="Precision Mismatch Between Keras and HLS">
+To improve accuracy:
+
+1. Increase precision:
+   ```python
+   config['Model']['Precision'] = 'ap_fixed<32,16>'
+   ```
+2. Use per-layer precision:
+   ```python
+   config['LayerName']['critical_layer'] = {'Precision': 'ap_fixed<24,12>'}
+   ```
+3. Enable bit-exact mode for fixed-point propagation:
+   ```python
+   hls_model = hls4ml.converters.convert_from_keras_model(
+       model,
+       bit_exact=True,
+       hls_config=config
+   )
+   ```
+</Accordion>
+
+<Accordion title="Model Loading Issues with H5 Files">
+For models saved with `model.save()`:
+
+```python python
+# Option 1: Load model first
+import keras
+model = keras.models.load_model('model.h5')
+hls_model = hls4ml.converters.convert_from_keras_model(model, hls_config=config)
+
+# Option 2: Use config file
+config = {
+    'KerasH5': 'model.h5',
+    'OutputDir': 'hls_output',
+    # ... other config
+}
+hls_model = hls4ml.converters.convert_from_config(config)
+```
+
+For separate architecture and weights:
+```python python
+config = {
+    'KerasJson': 'model_architecture.json',
+    'KerasH5': 'model_weights.h5',
+    'OutputDir': 'hls_output',
+    # ... other config
+}
+```
+</Accordion>
+
+<Accordion title="QKeras Quantization Issues">
+When working with QKeras models:
+
+1. Ensure QKeras is installed: `pip install qkeras`
+2. QKeras quantizers are automatically detected and converted
+3. Check quantizer configuration:
+   ```python
+   from qkeras import QDense, quantized_bits
+   
+   model = keras.Sequential([
+       QDense(32, kernel_quantizer=quantized_bits(8,0,alpha=1),
+              bias_quantizer=quantized_bits(8,0,alpha=1))
+   ])
+   ```
+</Accordion>
+
+<Accordion title="Keras v3 Compatibility">
+For Keras v3 (TensorFlow 2.16+):
+
+1. hls4ml automatically detects Keras v3
+2. Some layers may require fallback:
+   ```python
+   hls_model = hls4ml.converters.convert_from_keras_model(
+       model,
+       allow_v2_fallback=True,  # Use v2 handlers as fallback
+       allow_da_fallback=True,   # Use dataflow architecture fallback
+       hls_config=config
+   )
+   ```
+3. Check compatibility with: `import keras; print(keras.__version__)`
+</Accordion>
+</AccordionGroup>
+
+## Advanced Usage
+
+### Custom Layer Handlers
+
+Register custom handlers for unsupported layers:
+
+```python python
+from hls4ml.converters import register_keras_v2_layer_handler
+from hls4ml.converters.keras_v2_to_hls import keras_handler, parse_default_keras_layer
+
+@keras_handler('MyCustomLayer')
+def parse_custom_layer(keras_layer, input_names, input_shapes, data_reader):
+    layer = parse_default_keras_layer(keras_layer, input_names)
+    
+    # Extract custom attributes
+    layer['custom_param'] = keras_layer['config']['custom_param']
+    
+    # Define output shape
+    output_shape = input_shapes[0]  # Modify as needed
+    
+    return layer, output_shape
+
+# Now MyCustomLayer will be supported
+```
+
+### Using config_from_keras_model()
+
+Generate optimized configuration automatically:
+
+```python python
+config = hls4ml.utils.config_from_keras_model(
+    model,
+    granularity='name',  # 'name' or 'type'
+    backend='Vivado',
+    default_precision='ap_fixed<16,6>',
+    default_reuse_factor=1
+)
+
+# Inspect generated config
+print(config)
+
+# Modify as needed
+config['Model']['Strategy'] = 'Latency'
+```
+
+## Source Code Reference
+
+The Keras converter implementation can be found at:
+- `hls4ml/converters/keras_v2_to_hls.py:348` - Main conversion function
+- `hls4ml/converters/keras/` - Layer-specific handlers
+- `hls4ml/converters/__init__.py:169` - API entry point
+
+## Next Steps
+
+<CardGroup cols={2}>
+<Card title="Configuration" icon="gear" href="/concepts/model-conversion">
+  Learn about advanced configuration options
+</Card>
+<Card title="Optimization" icon="gauge-high" href="/advanced/optimization">
+  Optimize your model for FPGA deployment
+</Card>
+<Card title="Backends" icon="microchip" href="/concepts/hls-backends">
+  Explore different FPGA backend options
+</Card>
+<Card title="API Reference" icon="code" href="/api/overview">
+  Complete API documentation
+</Card>
+</CardGroup>

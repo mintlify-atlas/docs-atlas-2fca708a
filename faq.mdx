@@ -1,0 +1,689 @@
+---
+title: 'FAQ'
+description: 'Frequently asked questions and troubleshooting for hls4ml'
+---
+
+## General Questions
+
+<AccordionGroup>
+  <Accordion title="What is hls4ml?">
+    hls4ml is a package for machine learning inference in FPGAs using High-Level Synthesis (HLS). It converts trained neural network models from Keras, PyTorch, and ONNX into optimized FPGA firmware.
+    
+    hls4ml is designed for **ultra-low-latency** applications requiring microsecond-level inference, such as:
+    - High-energy physics triggers at CERN's Large Hadron Collider
+    - Real-time control systems for quantum computing
+    - Feedback loops in nuclear fusion reactors
+    - Low-power environmental monitoring on satellites
+    - Biomedical signal processing (e.g., arrhythmia classification)
+    
+    See the [official documentation](https://fastmachinelearning.org/hls4ml/) for full details.
+  </Accordion>
+
+  <Accordion title="How does hls4ml work?">
+    hls4ml takes models from Keras, PyTorch, or ONNX (optionally quantized) and produces high-level synthesis code in C++ that can be converted to FPGA firmware using vendor HLS compilers:
+    
+    1. **Parse** the trained model to extract architecture and weights
+    2. **Optimize** by fusing layers (e.g., BatchNorm into Conv), applying precision inference
+    3. **Generate** C++ HLS code implementing each layer
+    4. **Synthesize** with vendor tools (Vivado HLS, Vitis, Quartus, etc.) to create RTL
+    5. **Integrate** into FPGA designs or run standalone
+    
+    The generated firmware stores all weights on-chip for fast access with configurable parallelism.
+  </Accordion>
+
+  <Accordion title="How is hls4ml so fast?">
+    hls4ml achieves ultra-low latency through several techniques:
+    
+    - **On-chip weight storage**: All model parameters stored in FPGA block RAM for immediate access
+    - **Spatial dataflow architecture**: Exploits FPGA parallelism by implementing layers as hardware pipelines
+    - **Configurable parallelism**: Fully parallel (`ReuseFactor=1`) for minimum latency or resource-sharing for efficiency
+    - **Fixed-point arithmetic**: Uses optimized fixed-point types instead of floating-point
+    - **Layer fusion**: Merges operations (e.g., Conv+BatchNorm+ReLU) into single hardware blocks
+    
+    Typical latencies:
+    - **io_parallel**: 50-200 nanoseconds for small models
+    - **io_stream**: 1-10 microseconds for larger models
+    
+    Compare this to GPU inference (milliseconds) or CPU (tens of milliseconds).
+  </Accordion>
+
+  <Accordion title="Will my model work with hls4ml?">
+    hls4ml supports many common layers in MLP, CNN, and RNN architectures:
+    
+    **Supported:**
+    - Dense (fully connected) layers
+    - Convolutional layers (Conv1D, Conv2D, DepthwiseConv)
+    - Pooling layers (MaxPooling, AveragePooling, GlobalPooling)
+    - Activations (ReLU, sigmoid, tanh, softmax, ELU, LeakyReLU, etc.)
+    - Batch normalization
+    - Recurrent layers (LSTM, GRU)
+    - Residual/skip connections
+    - Quantized layers (QKeras, HGQ, Brevitas)
+    
+    **Limited support:**
+    - Graph Neural Networks (experimental)
+    - Transformers (early development, not stable)
+    - Custom layers (requires extension API)
+    
+    **Not supported:**
+    - Large Language Models (LLMs)
+    - Large vision transformers
+    - Extremely novel architectures
+    
+    If you encounter unsupported features, [open an issue](https://github.com/fastmachinelearning/hls4ml/issues) on GitHub.
+  </Accordion>
+
+  <Accordion title="Will my X-parameter model fit on FPGA Y?">
+    **It depends** - parameter count alone is a poor predictor of FPGA resource usage.
+    
+    hls4ml has successfully deployed:
+    - **Small models**: O(1,000) parameters on modest FPGAs
+    - **Medium models**: O(10,000) parameters with quantization
+    - **Larger models**: O(100,000) parameters on large FPGAs with aggressive optimization
+    
+    **Factors affecting resource usage:**
+    
+    <CardGroup cols={2}>
+      <Card title="Model Architecture" icon="diagram-project">
+        - CNNs reuse parameters → lower resource usage
+        - Dense layers → higher resource usage
+        - Activations with LUTs → additional resources
+      </Card>
+      
+      <Card title="Configuration" icon="gear">
+        - **Precision**: Lower bit widths → fewer resources
+        - **ReuseFactor**: Higher values → more resource sharing
+        - **IOType**: `io_stream` → lower resource usage than `io_parallel`
+        - **Strategy**: `Resource` → more sharing than `Latency`
+      </Card>
+    </CardGroup>
+    
+    <Note>
+    Use [rule4ml](https://github.com/IMPETUS-UdeS/rule4ml) or [wa-hls4ml](https://github.com/Dendendelen/wa-hls4ml) for quick estimates without synthesis.
+    </Note>
+    
+    **Model compression techniques:**
+    ```python
+    # Quantization - reduce bit widths
+    config['Model']['Precision'] = 'ap_fixed<8,3>'
+    
+    # Increase reuse factor
+    config['Model']['ReuseFactor'] = 16
+    
+    # Use streaming I/O
+    hls_model = hls4ml.converters.convert_from_keras_model(
+        model, hls_config=config, io_type='io_stream'
+    )
+    ```
+    
+    LLMs and large vision transformers are not supported.
+  </Accordion>
+</AccordionGroup>
+
+## Getting Started
+
+<AccordionGroup>
+  <Accordion title="How do I get started with hls4ml?">
+    We strongly recommend the [hls4ml tutorials](https://github.com/fastmachinelearning/hls4ml-tutorial) for hands-on learning:
+    
+    1. **Part 1**: Introduction to FPGAs and HLS
+    2. **Part 2**: Your first hls4ml model conversion
+    3. **Part 3**: Model optimization and compression
+    4. **Part 4**: Advanced features (profiling, custom layers)
+    
+    Also see the [Quickstart guide](/quickstart) for a rapid introduction.
+    
+    **Quick example:**
+    ```python
+    import hls4ml
+    from keras.models import Sequential
+    from keras.layers import Dense
+    
+    # Create model
+    model = Sequential([Dense(64, input_shape=(16,), activation='relu')])
+    
+    # Convert to HLS
+    config = hls4ml.utils.config_from_keras_model(model)
+    hls_model = hls4ml.converters.convert_from_keras_model(
+        model, hls_config=config, backend='Vitis'
+    )
+    
+    # Test
+    hls_model.compile()
+    ```
+  </Accordion>
+
+  <Accordion title="What hardware do I need?">
+    **For development and testing:**
+    - Linux or macOS machine with Python 3.10+
+    - C++ compiler (g++ on Linux, Xcode on macOS)
+    - 8GB+ RAM recommended
+    
+    **For synthesis:**
+    - Vendor HLS tools (see [Installation](/installation)):
+      - Vivado HLS 2020.1+ or Vitis HLS 2022.2+ (Xilinx/AMD)
+      - Quartus 20.1-21.4 or oneAPI 2024.1-2025.0 (Intel/Altera)
+      - Catapult HLS 2024.1+ (Siemens/Mentor)
+    - 16GB+ RAM recommended for synthesis
+    - Multi-core CPU helpful (synthesis is parallelizable)
+    
+    **For deployment:**
+    - Target FPGA board matching your chosen part
+    - JTAG programmer/debugger
+    - Host interface (PCIe, Ethernet, etc.) if needed
+    
+    <Note>
+    You can do everything except final synthesis without FPGA hardware using C simulation.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Which backend should I choose?">
+    Choose based on your target FPGA vendor and design requirements:
+    
+    | Backend | Vendor | Best For | Notes |
+    |---------|--------|----------|-------|
+    | **Vitis** | Xilinx/AMD | New designs, UltraScale+ | Recommended for new projects |
+    | **Vivado** | Xilinx/AMD | Legacy 7-series, UltraScale | Mature, well-tested |
+    | **Quartus** | Intel/Altera | Stratix, Arria, Cyclone | Stratix 10, Arria 10 |
+    | **oneAPI** | Intel/Altera | Modern Intel FPGAs | Experimental, uses SYCL |
+    | **Catapult** | Any | ASICs and FPGAs | Best for ASIC flows |
+    
+    Example:
+    ```python
+    # Xilinx UltraScale+
+    hls_model = hls4ml.converters.convert_from_keras_model(
+        model, hls_config=config, backend='Vitis'
+    )
+    
+    # Intel Stratix 10
+    hls_model = hls4ml.converters.convert_from_keras_model(
+        model, hls_config=config, backend='Quartus',
+        part='1SG280LU2F50E2VG'
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="Do I need to know FPGA programming?">
+    **No!** hls4ml abstracts away most FPGA details:
+    
+    - No HDL (Verilog/VHDL) knowledge required
+    - No understanding of FPGA primitives needed
+    - Basic Python and ML framework knowledge sufficient
+    
+    **However, some FPGA concepts help:**
+    - Fixed-point arithmetic and precision
+    - Parallelism vs resource usage tradeoffs  
+    - Latency vs throughput
+    - FPGA resources (LUTs, FFs, DSPs, BRAMs)
+    
+    The [tutorials](https://github.com/fastmachinelearning/hls4ml-tutorial) provide this background.
+  </Accordion>
+</AccordionGroup>
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="My predictions don't match the original model">
+    This is usually a **precision issue**. hls4ml uses fixed-point arithmetic while ML frameworks use floating-point.
+    
+    **Solutions:**
+    
+    <Steps>
+      <Step title="Increase bit widths">
+        ```python
+        # Default: ap_fixed<16,6> (16 total bits, 6 integer bits)
+        config['Model']['Precision'] = 'ap_fixed<32,16>'
+        
+        # Or per-layer
+        config['LayerName']['my_layer']['Precision'] = 'ap_fixed<24,12>'
+        ```
+      </Step>
+      
+      <Step title="Use profiling to find optimal precision">
+        ```python
+        from hls4ml.model.profiling import numerical
+        import matplotlib.pyplot as plt
+        
+        # Profile weights and activations
+        plots = numerical(
+            model=keras_model,
+            hls_model=hls_model,
+            X=test_data
+        )
+        plt.show()
+        
+        # Grey boxes show current precision coverage
+        # Adjust until boxes contain the distributions
+        ```
+      </Step>
+      
+      <Step title="Check accumulator precision">
+        ```python
+        # Accumulator needs more bits for sums
+        config['LayerName']['my_dense']['accum_t'] = 'ap_fixed<32,16>'
+        ```
+      </Step>
+    </Steps>
+    
+    <Note>
+    Some mismatch is expected for activation functions implemented as lookup tables (LUTs). Bit-exact behavior is not always possible.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Build fails: 'Stop unrolling loop because it may cause large runtime'">
+    This error means your model is **too large** for the chosen configuration.
+    
+    **Solutions:**
+    
+    <Tabs>
+      <Tab title="Quick Fixes">
+        ```python
+        # 1. Switch to streaming I/O
+        hls_model = hls4ml.converters.convert_from_keras_model(
+            model,
+            hls_config=config,
+            io_type='io_stream',  # instead of io_parallel
+            backend='Vitis'
+        )
+        
+        # 2. Use Resource strategy
+        config['Model']['Strategy'] = 'Resource'  # instead of 'Latency'
+        
+        # 3. Increase reuse factor
+        config['Model']['ReuseFactor'] = 8  # or 16, 32, etc.
+        ```
+      </Tab>
+      
+      <Tab title="Model Compression">
+        ```python
+        # Reduce precision
+        config['Model']['Precision'] = 'ap_fixed<8,3>'
+        
+        # Quantization-aware training
+        from qkeras import QDense, QActivation
+        
+        model = Sequential([
+            QDense(64, kernel_quantizer='quantized_bits(4,0,alpha=1)',
+                   bias_quantizer='quantized_bits(4,0,alpha=1)')
+        ])
+        
+        # Pruning (remove less important weights)
+        import tensorflow_model_optimization as tfmot
+        
+        model = tfmot.sparsity.keras.prune_low_magnitude(model)
+        ```
+      </Tab>
+      
+      <Tab title="Architecture Changes">
+        - Reduce number of neurons/filters
+        - Reduce layer depth
+        - Use depthwise separable convolutions
+        - Replace dense layers with global pooling where possible
+      </Tab>
+    </Tabs>
+  </Accordion>
+
+  <Accordion title="Build fails: 'cannot open shared object file'">
+    This indicates **HLS compilation failed**. It's likely a bug in hls4ml's code generation.
+    
+    **Debugging steps:**
+    
+    1. **Check the log file:**
+       ```bash
+       cat my-hls-test/vivado_hls.log
+       # or
+       cat my-hls-test/vitis_hls.log
+       ```
+    
+    2. **Look for C++ errors** in the generated code:
+       ```bash
+       # Check for syntax errors
+       g++ -c my-hls-test/firmware/myproject.cpp -Imy-hls-test/firmware
+       ```
+    
+    3. **Common causes:**
+       - Unsupported layer configuration
+       - Edge case in layer shape handling
+       - Missing layer handler for custom operations
+    
+    4. **Report the bug:**
+       Open an issue at [github.com/fastmachinelearning/hls4ml](https://github.com/fastmachinelearning/hls4ml/issues) with:
+       - Model architecture (code or summary)
+       - Configuration used
+       - Error messages from log
+       - hls4ml version
+    
+    <Warning>
+    Even if the error message looks similar to existing bugs, the cause may differ. Unless you're certain it's the same issue, open a new bug report.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="Synthesis takes forever / uses too much memory">
+    Large models can take **hours** to synthesize and use **>32GB RAM**.
+    
+    **Solutions:**
+    
+    ```python
+    # 1. Skip synthesis, just compile for simulation
+    hls_model.compile()  # Fast C++ compilation
+    hls_model.predict(X)  # Test without synthesis
+    
+    # 2. Reduce parallelism
+    config['Model']['ReuseFactor'] = 16
+    config['Model']['Strategy'] = 'Resource'
+    
+    # 3. Use streaming I/O
+    io_type='io_stream'
+    
+    # 4. Run synthesis on a more powerful machine
+    # Or use cloud instances (AWS, GCP, Azure)
+    ```
+    
+    <Note>
+    First few layers often dominate synthesis time. Optimize those first.
+    </Note>
+  </Accordion>
+
+  <Accordion title="ImportError: cannot import converters or utils">
+    This suggests **broken installation** or **missing dependencies**.
+    
+    ```python
+    # Reinstall hls4ml
+    pip uninstall hls4ml
+    pip install hls4ml
+    
+    # Verify installation
+    import hls4ml
+    print(hls4ml.__version__)
+    
+    # Check specific imports
+    from hls4ml import converters, utils, report
+    
+    # If still failing, check for dependency issues
+    pip install --upgrade numpy pyyaml h5py
+    ```
+  </Accordion>
+
+  <Accordion title="Model with custom layers fails to convert">
+    hls4ml doesn't automatically support custom layers - you need to register a handler.
+    
+    **Options:**
+    
+    1. **Replace with equivalent supported layers** (easiest)
+    
+    2. **Use the extension API** to add support:
+       ```python
+       from hls4ml.converters import register_keras_v2_layer_handler
+       from hls4ml.model.layers import Layer
+       
+       # Define your custom layer
+       class MyCustomLayer(Layer):
+           def initialize(self):
+               # Setup layer attributes
+               pass
+       
+       # Register handler
+       @register_keras_v2_layer_handler('MyCustomLayer')
+       def parse_my_layer(keras_layer, input_names, input_shapes, data_reader, config):
+           # Parse layer and return hls4ml layer
+           pass
+       ```
+    
+    3. **Request support** via [GitHub Discussions](https://github.com/fastmachinelearning/hls4ml/discussions)
+    
+    See the [extension documentation](https://fastmachinelearning.org/hls4ml/advanced/extension.html) for details.
+  </Accordion>
+</AccordionGroup>
+
+## Optimization & Performance
+
+<AccordionGroup>
+  <Accordion title="How do I reduce resource usage?">
+    **Priority order** (most impact first):
+    
+    <Steps>
+      <Step title="Reduce precision">
+        ```python
+        # Start with 16 bits, reduce gradually
+        config['Model']['Precision'] = 'ap_fixed<8,3>'
+        
+        # Use profiling to find minimum viable precision
+        ```
+      </Step>
+      
+      <Step title="Increase ReuseFactor">
+        ```python
+        # 1 = fully parallel (max resources, min latency)
+        # Higher values = more resource sharing
+        config['Model']['ReuseFactor'] = 16
+        ```
+      </Step>
+      
+      <Step title="Use Resource strategy">
+        ```python
+        config['Model']['Strategy'] = 'Resource'
+        ```
+      </Step>
+      
+      <Step title="Switch to streaming I/O">
+        ```python
+        hls_model = hls4ml.converters.convert_from_keras_model(
+            model, hls_config=config, io_type='io_stream'
+        )
+        ```
+      </Step>
+      
+      <Step title="Model compression">
+        - Quantization-aware training (QKeras, HGQ, Brevitas)
+        - Pruning
+        - Knowledge distillation to smaller model
+      </Step>
+    </Steps>
+  </Accordion>
+
+  <Accordion title="How do I reduce latency?">
+    **Priority order:**
+    
+    ```python
+    # 1. Use parallel I/O
+    io_type='io_parallel'
+    
+    # 2. Use Latency strategy
+    config['Model']['Strategy'] = 'Latency'
+    
+    # 3. Set ReuseFactor = 1 (fully parallel)
+    config['Model']['ReuseFactor'] = 1
+    
+    # 4. Use wider pipelines
+    config['Model']['Precision'] = 'ap_fixed<8,3>'  # fewer bits = faster
+    
+    # 5. Optimize model architecture
+    # - Fewer layers
+    # - Smaller kernels
+    # - Depthwise convolutions
+    ```
+    
+    <Warning>
+    Lower latency = higher resource usage. There's always a tradeoff.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What's the difference between io_parallel and io_stream?">
+    | Feature | io_parallel | io_stream |
+    |---------|-------------|------------|
+    | **Latency** | Lowest (50-200ns) | Higher (1-10μs) |
+    | **Resources** | Highest | Lower |
+    | **Throughput** | One inference at a time | Pipelined |
+    | **Best for** | Single inputs, min latency | Streaming data, large models |
+    | **I/O interface** | All inputs/outputs at once | Sequential stream |
+    
+    ```python
+    # Parallel I/O - all inputs available simultaneously
+    y = hls_model.predict(x)  # Returns in ~100ns
+    
+    # Streaming I/O - inputs arrive sequentially  
+    # Lower resource usage, higher throughput for continuous streams
+    ```
+  </Accordion>
+
+  <Accordion title="How do I use profiling tools?">
+    ```python
+    from hls4ml.model.profiling import numerical
+    import matplotlib.pyplot as plt
+    
+    # Load your model and test data
+    model = load_keras_model('model.h5')
+    X_test = np.load('test_data.npy')
+    
+    # Convert to HLS
+    config = hls4ml.utils.config_from_keras_model(model, granularity='name')
+    hls_model = hls4ml.converters.convert_from_keras_model(
+        model, hls_config=config
+    )
+    
+    # Profile (requires: pip install hls4ml[profiling])
+    plots = numerical(
+        model=model,
+        hls_model=hls_model,
+        X=X_test
+    )
+    
+    plt.show()
+    ```
+    
+    **Interpreting plots:**
+    - Box plots show distribution of weights/activations
+    - Grey boxes show range representable with current precision
+    - If box-and-whisker extends outside grey box → increase precision
+    - If grey box is much larger → can reduce precision
+  </Accordion>
+</AccordionGroup>
+
+## Contributing
+
+<AccordionGroup>
+  <Accordion title="How do I contribute to hls4ml?">
+    We welcome contributions! Here's how to get involved:
+    
+    <Steps>
+      <Step title="Start a discussion">
+        If you have a feature idea, start a [GitHub Discussion](https://github.com/fastmachinelearning/hls4ml/discussions) first.
+      </Step>
+      
+      <Step title="Review contribution guidelines">
+        Read [CONTRIBUTING.md](https://github.com/fastmachinelearning/hls4ml/blob/main/CONTRIBUTING.md) for technical requirements:
+        - Code style (using ruff formatter)
+        - Testing requirements
+        - Documentation standards
+      </Step>
+      
+      <Step title="Fork and develop">
+        ```bash
+        git clone https://github.com/YOUR_USERNAME/hls4ml.git
+        cd hls4ml
+        pip install -e .[testing]
+        
+        # Make changes
+        # Run tests
+        pytest test/
+        ```
+      </Step>
+      
+      <Step title="Submit pull request">
+        - Describe changes clearly
+        - Include tests for new features
+        - Update documentation if needed
+      </Step>
+    </Steps>
+    
+    **Join the community:**
+    - Attend online meetings (request invite via [CERN e-group](https://e-groups.cern.ch/e-groups/Egroup.do?egroupName=hls-fml))
+    - Chat on GitHub Discussions
+    - Present your use cases
+    
+    **Acknowledgment:**
+    > We acknowledge the Fast Machine Learning collective as an open community of multi-domain experts and collaborators.
+  </Accordion>
+
+  <Accordion title="How should I report bugs?">
+    [Open an issue](https://github.com/fastmachinelearning/hls4ml/issues/new?template=bug_report.md) with:
+    
+    1. **Environment info:**
+       ```python
+       import hls4ml
+       print(hls4ml.__version__)
+       import sys
+       print(sys.version)
+       ```
+    
+    2. **Minimal reproducible example:**
+       ```python
+       # Code that demonstrates the bug
+       ```
+    
+    3. **Error messages:**
+       - Full stack trace
+       - HLS log files if synthesis failed
+    
+    4. **Expected vs actual behavior**
+    
+    <Note>
+    Even if the error looks similar to existing issues, open a new one if you're not certain - the root cause may differ.
+    </Note>
+  </Accordion>
+</AccordionGroup>
+
+## Additional Resources
+
+<CardGroup cols={2}>
+  <Card title="Documentation" icon="book" href="https://fastmachinelearning.org/hls4ml/">
+    Official hls4ml documentation
+  </Card>
+  
+  <Card title="Tutorials" icon="graduation-cap" href="https://github.com/fastmachinelearning/hls4ml-tutorial">
+    Hands-on Jupyter notebooks
+  </Card>
+  
+  <Card title="GitHub Discussions" icon="messages" href="https://github.com/fastmachinelearning/hls4ml/discussions">
+    Ask questions and share projects
+  </Card>
+  
+  <Card title="Example Models" icon="folder" href="https://github.com/fastmachinelearning/example-models">
+    Pre-trained models to experiment with
+  </Card>
+  
+  <Card title="Video Tutorial" icon="video" href="https://www.youtube.com/watch?v=2y3GNY4tf7A">
+    Intro to FPGAs, HLS, and ML inference
+  </Card>
+  
+  <Card title="Research Papers" icon="file-pdf" href="https://fastmachinelearning.org/hls4ml/">
+    Citations and publications
+  </Card>
+</CardGroup>
+
+## Citation
+
+If you use hls4ml in research, please cite:
+
+```bibtex
+@software{fastml_hls4ml,
+  author       = {{FastML Team}},
+  title        = {fastmachinelearning/hls4ml},
+  year         = 2025,
+  publisher    = {Zenodo},
+  version      = {v1.2.0},
+  doi          = {10.5281/zenodo.1201549},
+  url          = {https://github.com/fastmachinelearning/hls4ml}
+}
+
+@article{Duarte:2018ite,
+    author = "Duarte, Javier and others",
+    title = "{Fast inference of deep neural networks in FPGAs for particle physics}",
+    journal = "JINST",
+    volume = "13",
+    number = "07",
+    pages = "P07027",
+    year = "2018",
+    doi = "10.1088/1748-0221/13/07/P07027"
+}
+```

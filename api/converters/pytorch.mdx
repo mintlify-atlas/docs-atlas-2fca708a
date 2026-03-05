@@ -1,0 +1,413 @@
+---
+title: 'PyTorch Converter'
+description: 'Convert PyTorch models to HLS'
+---
+
+## convert_from_pytorch_model
+
+Convert a PyTorch model to an hls4ml ModelGraph.
+
+```python
+hls4ml.converters.convert_from_pytorch_model(
+    model,
+    output_dir='my-hls-test',
+    project_name='myproject',
+    input_data_tb=None,
+    output_data_tb=None,
+    backend='Vivado',
+    hls_config=None,
+    **kwargs
+)
+```
+
+### Parameters
+
+<ParamField path="model" type="torch.nn.Module" required>
+  PyTorch model to convert. Must be a `torch.nn.Module` instance.
+</ParamField>
+
+<ParamField path="output_dir" type="str" default="my-hls-test">
+  Output directory for the generated HLS project.
+</ParamField>
+
+<ParamField path="project_name" type="str" default="myproject">
+  Name of the HLS project. Used as the top-level function name.
+</ParamField>
+
+<ParamField path="input_data_tb" type="str" default="None">
+  Path to input test data in `.npy` or `.dat` format for C simulation and co-simulation.
+</ParamField>
+
+<ParamField path="output_data_tb" type="str" default="None">
+  Path to expected output data in `.npy` or `.dat` format for verification.
+</ParamField>
+
+<ParamField path="backend" type="str" default="Vivado">
+  Backend to use. Options: `'Vivado'`, `'Vitis'`, `'Quartus'`, `'Catapult'`.
+</ParamField>
+
+<ParamField path="board" type="str" default="None">
+  Target board from `supported_board.json`. Overrides `part` parameter.
+</ParamField>
+
+<ParamField path="part" type="str" default="None">
+  FPGA part number. Backend-specific defaults used if not provided.
+</ParamField>
+
+<ParamField path="clock_period" type="int" default="5">
+  Clock period in nanoseconds.
+</ParamField>
+
+<ParamField path="io_type" type="str" default="io_parallel">
+  Interface type: `'io_parallel'` or `'io_stream'`.
+</ParamField>
+
+<ParamField path="hls_config" type="dict" default="None">
+  HLS configuration dictionary. Must include `'InputShape'` key.
+</ParamField>
+
+### Returns
+
+<ResponseField name="hls_model" type="ModelGraph">
+  The converted hls4ml model ready for compilation and synthesis.
+</ResponseField>
+
+### Example
+
+```python
+import torch
+import torch.nn as nn
+import hls4ml
+
+# Define PyTorch model
+class SimpleNet(nn.Module):
+    def __init__(self):
+        super(SimpleNet, self).__init__()
+        self.fc1 = nn.Linear(10, 64)
+        self.relu1 = nn.ReLU()
+        self.fc2 = nn.Linear(64, 32)
+        self.relu2 = nn.ReLU()
+        self.fc3 = nn.Linear(32, 1)
+        self.sigmoid = nn.Sigmoid()
+    
+    def forward(self, x):
+        x = self.relu1(self.fc1(x))
+        x = self.relu2(self.fc2(x))
+        x = self.sigmoid(self.fc3(x))
+        return x
+
+model = SimpleNet()
+model.eval()
+
+# Configure HLS settings
+hls_config = {
+    'Model': {
+        'Precision': 'ap_fixed<16,6>',
+        'ReuseFactor': 4
+    },
+    'InputShape': (10,)  # Required for PyTorch models
+}
+
+# Convert to HLS
+hls_model = hls4ml.converters.convert_from_pytorch_model(
+    model,
+    output_dir='my_pytorch_prj',
+    project_name='my_pytorch_model',
+    backend='Vivado',
+    hls_config=hls_config
+)
+
+# Compile the model
+hls_model.compile()
+
+# Test predictions
+import numpy as np
+X_test = np.random.rand(100, 10).astype(np.float32)
+predictions = hls_model.predict(X_test)
+```
+
+## pytorch_to_hls
+
+Lower-level function that performs the actual PyTorch to HLS conversion.
+
+```python
+hls4ml.converters.pytorch_to_hls(config)
+```
+
+### Parameters
+
+<ParamField path="config" type="dict" required>
+  Configuration dictionary containing model and conversion parameters.
+</ParamField>
+
+### Returns
+
+<ResponseField name="model_graph" type="ModelGraph">
+  The hls4ml ModelGraph representation.
+</ResponseField>
+
+## parse_pytorch_model
+
+Parse a PyTorch model and extract its layers.
+
+```python
+hls4ml.converters.parse_pytorch_model(config, verbose=True)
+```
+
+### Parameters
+
+<ParamField path="config" type="dict" required>
+  Configuration dictionary with `'PytorchModel'` and `'InputShape'` keys.
+</ParamField>
+
+<ParamField path="verbose" type="bool" default="True">
+  Print parsing progress and layer information.
+</ParamField>
+
+### Returns
+
+<ResponseField name="result" type="tuple">
+  Returns `(layer_list, input_layers, output_layers)` where:
+  - `layer_list`: List of layer dictionaries
+  - `input_layers`: List of input layer names
+  - `output_layers`: List of output layer names
+</ResponseField>
+
+### Example
+
+```python
+import torch
+import hls4ml
+
+model = SimpleNet()
+config = {
+    'PytorchModel': model,
+    'InputShape': (10,)
+}
+
+layer_list, inputs, outputs = hls4ml.converters.parse_pytorch_model(config)
+
+for layer in layer_list:
+    print(f"{layer['name']}: {layer['class_name']}")
+```
+
+## Data Format Conversion
+
+<Warning>
+  **Important:** PyTorch uses "channels first" format while hls4ml uses "channels last" (Keras convention).
+</Warning>
+
+### Automatic Conversion
+
+By default, hls4ml automatically transposes inputs and internal layers:
+
+```python
+hls_config = {
+    'Model': {
+        'ChannelsLastConversion': 'full',  # Default
+        'TransposeOutputs': False  # Output remains channels-last
+    },
+    'InputShape': (3, 224, 224)  # PyTorch format (C, H, W)
+}
+```
+
+### Conversion Options
+
+<ParamField path="ChannelsLastConversion" type="str">
+  - `'full'`: Convert inputs and internal layers (default)
+  - `'internal'`: Only convert internal layers (user transposes input)
+  - `'off'`: No conversion (not recommended)
+</ParamField>
+
+<ParamField path="TransposeOutputs" type="bool">
+  - `False`: Output in channels-last format (default)
+  - `True`: Transpose output back to channels-first
+</ParamField>
+
+### Manual Input Transpose
+
+For `io_stream` interface, transpose inputs manually:
+
+```python
+import numpy as np
+
+# Input in PyTorch format: (N, C, H, W)
+x_pytorch = np.random.rand(1, 3, 32, 32)
+
+# Transpose to channels-last: (N, H, W, C)
+x_hls = np.transpose(x_pytorch, (0, 2, 3, 1))
+
+hls_config = {
+    'Model': {
+        'ChannelsLastConversion': 'internal'
+    },
+    'InputShape': (32, 32, 3)  # Already in channels-last
+}
+
+predictions = hls_model.predict(x_hls[0])  # Remove batch dimension
+```
+
+## Supported Layers
+
+PyTorch converter supports:
+
+### Linear Layers
+- `nn.Linear` - Fully connected layer
+
+### Convolutional Layers
+- `nn.Conv1d` - 1D convolution
+- `nn.Conv2d` - 2D convolution
+
+### Activation Functions
+- `nn.ReLU` / `F.relu`
+- `nn.LeakyReLU` / `F.leaky_relu`
+- `nn.ELU` / `F.elu`
+- `nn.PReLU`
+- `nn.Sigmoid` / `F.sigmoid`
+- `nn.Tanh` / `F.tanh`
+- `nn.Softmax` / `F.softmax`
+- `nn.Threshold`
+
+### Pooling Layers
+- `nn.MaxPool1d` / `F.max_pool1d`
+- `nn.MaxPool2d` / `F.max_pool2d`
+- `nn.AvgPool1d` / `F.avg_pool1d`
+- `nn.AvgPool2d` / `F.avg_pool2d`
+
+### Normalization
+- `nn.BatchNorm1d`
+- `nn.BatchNorm2d`
+
+### Recurrent Layers
+- `nn.RNN`
+- `nn.LSTM`
+- `nn.GRU`
+
+### Structural
+- `nn.Flatten` / `F.flatten`
+- `torch.flatten`
+- Tensor reshaping (`.view()`)
+- `nn.Dropout` (removed during conversion)
+
+### Element-wise Operations
+- `torch.add` / `+`
+- `torch.mul` / `*`
+- `torch.sub` / `-`
+
+## Model Reader Classes
+
+### PyTorchModelReader
+
+Reads weights from a PyTorch model in memory.
+
+```python
+class PyTorchModelReader:
+    def __init__(self, config):
+        self.torch_model = config['PytorchModel']
+        self.state_dict = self.torch_model.state_dict()
+        self.input_shape = config['InputShape']
+    
+    def get_weights_data(self, layer_name, var_name):
+        # Returns weight data for specified layer and variable
+        pass
+```
+
+### PyTorchFileReader
+
+Reads weights from a saved PyTorch model file.
+
+```python
+class PyTorchFileReader(PyTorchModelReader):
+    def __init__(self, config):
+        # Loads model from file path
+        self.torch_model = torch.load(config['PytorchModel'])
+        self.input_shape = config['InputShape']
+        self.state_dict = self.torch_model.state_dict()
+```
+
+## Advanced Example
+
+```python
+import torch
+import torch.nn as nn
+import hls4ml
+import numpy as np
+
+# CNN model
+class ConvNet(nn.Module):
+    def __init__(self):
+        super(ConvNet, self).__init__()
+        self.conv1 = nn.Conv2d(3, 16, 3, padding=1)
+        self.bn1 = nn.BatchNorm2d(16)
+        self.relu = nn.ReLU()
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
+        self.bn2 = nn.BatchNorm2d(32)
+        self.fc = nn.Linear(32 * 8 * 8, 10)
+    
+    def forward(self, x):
+        x = self.pool(self.relu(self.bn1(self.conv1(x))))
+        x = self.pool(self.relu(self.bn2(self.conv2(x))))
+        x = torch.flatten(x, 1)
+        x = self.fc(x)
+        return x
+
+model = ConvNet()
+model.eval()
+
+# Layer-specific configuration
+hls_config = {
+    'Model': {
+        'Precision': 'ap_fixed<16,6>',
+        'ReuseFactor': 1,
+        'Strategy': 'Latency',
+        'ChannelsLastConversion': 'full'
+    },
+    'InputShape': (3, 32, 32),  # C, H, W
+    'LayerName': {
+        'conv1': {'Precision': 'ap_fixed<16,8>', 'ReuseFactor': 2},
+        'conv2': {'Precision': 'ap_fixed<16,8>', 'ReuseFactor': 4},
+        'fc': {'Precision': 'ap_fixed<16,6>', 'ReuseFactor': 8}
+    }
+}
+
+# Convert and compile
+hls_model = hls4ml.converters.convert_from_pytorch_model(
+    model,
+    output_dir='convnet_hls',
+    project_name='convnet',
+    backend='Vivado',
+    io_type='io_stream',
+    hls_config=hls_config
+)
+
+hls_model.compile()
+
+# Test
+test_input = np.random.rand(1, 3, 32, 32).astype(np.float32)
+with torch.no_grad():
+    pytorch_out = model(torch.from_numpy(test_input)).numpy()
+
+# Transpose for hls4ml
+test_input_hls = np.transpose(test_input[0], (1, 2, 0))  # HWC
+hls_out = hls_model.predict(test_input_hls)
+
+print(f"PyTorch output: {pytorch_out}")
+print(f"hls4ml output: {hls_out}")
+```
+
+## Limitations
+
+<Warning>
+  - `io_stream` interface doesn't support automatic channel conversion
+  - Some functional operations require using `nn.Module` versions
+  - Complex control flow (if statements, loops) not supported
+  - Dynamic shapes not supported
+</Warning>
+
+## See Also
+
+- [Keras Converter](/api/converters/keras)
+- [ONNX Converter](/api/converters/onnx)
+- [Configuration Guide](/api/utils/config)
+- [Model API](/api/model/model)

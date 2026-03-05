@@ -1,0 +1,130 @@
+---
+title: Introduction
+description: Machine learning inference in FPGAs using high-level synthesis
+---
+
+<img
+  className="block dark:hidden"
+  src="https://github.com/fastmachinelearning/fastmachinelearning.github.io/raw/master/images/hls4ml_logo.svg"
+  alt="hls4ml Logo"
+  width="400"
+/>
+<img
+  className="hidden dark:block"
+  src="https://github.com/fastmachinelearning/fastmachinelearning.github.io/raw/master/images/hls4ml_logo.svg"
+  alt="hls4ml Logo"
+  width="400"
+/>
+
+# Welcome to hls4ml
+
+hls4ml is a Python package for machine learning inference in FPGAs. We create firmware implementations of machine learning algorithms using high-level synthesis (HLS). We translate traditional open-source machine learning package models into HLS that can be configured for your use-case.
+
+## Ultra-Low-Latency Inference
+
+hls4ml is designed for ultra-low-latency inference on FPGAs, achieving inference times below 1 microsecond. While it has strong roots in high-energy physics applications (e.g., L1 trigger systems at the CERN Large Hadron Collider), it has also been adopted across diverse scientific and industrial domains.
+
+## Real-World Applications
+
+<CardGroup cols={2}>
+  <Card title="High-Energy Physics" icon="atom">
+    L1 trigger systems at CERN's Large Hadron Collider for real-time particle detection
+  </Card>
+  <Card title="Quantum Computing" icon="microchip">
+    Control systems for quantum computing with ultra-low-latency requirements
+  </Card>
+  <Card title="Nuclear Fusion" icon="bolt">
+    Feedback loops in nuclear fusion reactors requiring microsecond response times
+  </Card>
+  <Card title="Satellite Systems" icon="satellite">
+    Low-power environmental monitoring on satellites with limited resources
+  </Card>
+  <Card title="Biomedical" icon="heart-pulse">
+    Biomedical signal processing including arrhythmia classification
+  </Card>
+  <Card title="Autonomous Systems" icon="car">
+    Real-time inference for autonomous vehicles and robotics
+  </Card>
+</CardGroup>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Multi-Framework Support" icon="code">
+    Convert models from Keras, PyTorch, and ONNX to optimized FPGA firmware
+  </Card>
+  <Card title="Multiple HLS Backends" icon="network-wired">
+    Support for Vivado, Vitis, Quartus, Catapult, and oneAPI
+  </Card>
+  <Card title="Precision Optimization" icon="sliders">
+    Automated precision optimization and quantization for resource efficiency
+  </Card>
+  <Card title="Profiling Tools" icon="chart-line">
+    Built-in profiling and performance analysis tools
+  </Card>
+  <Card title="Plugin System" icon="plug">
+    Extensible architecture for custom layers and operations
+  </Card>
+  <Card title="Open Source" icon="github">
+    Apache 2.0 licensed with an active community
+  </Card>
+</CardGroup>
+
+## Get Started
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get up and running with hls4ml in minutes
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Install hls4ml and its dependencies
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/overview">
+    Learn about model conversion and HLS synthesis
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore the complete API documentation
+  </Card>
+</CardGroup>
+
+## Community and Support
+
+If you have any questions, comments, or ideas regarding hls4ml, or want to show us how you use hls4ml, please reach out through our [GitHub Discussions](https://github.com/fastmachinelearning/hls4ml/discussions).
+
+<Note>
+  For introductory material on FPGAs, HLS, and ML inference using hls4ml, check out [this video tutorial](https://www.youtube.com/watch?v=2y3GNY4tf7A).
+</Note>
+
+## Citing hls4ml
+
+If you use hls4ml in your research, please cite:
+
+```bibtex
+@software{fastml_hls4ml,
+  author       = {{FastML Team}},
+  title        = {fastmachinelearning/hls4ml},
+  year         = 2025,
+  publisher    = {Zenodo},
+  version      = {v1.2.0},
+  doi          = {10.5281/zenodo.1201549},
+  url          = {https://github.com/fastmachinelearning/hls4ml}
+}
+```
+
+And the original publication:
+
+```bibtex
+@article{Duarte:2018ite,
+    author = "Duarte, Javier and others",
+    title = "{Fast inference of deep neural networks in FPGAs for particle physics}",
+    eprint = "1804.06913",
+    archivePrefix = "arXiv",
+    primaryClass = "physics.ins-det",
+    doi = "10.1088/1748-0221/13/07/P07027",
+    journal = "JINST",
+    volume = "13",
+    number = "07",
+    pages = "P07027",
+    year = "2018"
+}
+```

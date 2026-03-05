@@ -1,0 +1,701 @@
+---
+title: Optimization Flows
+description: Understanding optimization passes and the flow system in hls4ml
+---
+
+The optimization flow system in hls4ml provides a powerful mechanism for transforming the model graph through a series of optimization passes. This system enables both backend-specific optimizations and general transformations that improve the generated HLS code.
+
+## Overview
+
+The flow system consists of two main components:
+
+1. **Optimization Passes** - Individual transformations applied to the model
+2. **Flows** - Collections of passes with dependency management
+
+### Key Concepts
+
+<CardGroup cols={2}>
+  <Card title="OptimizerPass" icon="code-merge">
+    A single transformation that matches and modifies nodes
+  </Card>
+  <Card title="Flow" icon="diagram-project">
+    An ordered collection of optimization passes
+  </Card>
+  <Card title="Match" icon="bullseye">
+    Predicate to determine if pass applies to a node
+  </Card>
+  <Card title="Transform" icon="wand-magic-sparkles">
+    The actual modification to the model graph
+  </Card>
+</CardGroup>
+
+## Optimization Passes
+
+### OptimizerPass Base Class
+
+All optimizer passes inherit from the `OptimizerPass` class:
+
+```python
+class OptimizerPass:
+    """Base optimizer class from which all other optimizer types are derived."""
+    
+    name = None
+    
+    def __init__(self):
+        pass
+    
+    def match(self, node):
+        """Predicate to match on a given node.
+        
+        Args:
+            node (Layer): Node in the model graph to try matching
+        """
+        raise NotImplementedError
+    
+    def transform(self, model, node):
+        """Transformation to apply if matching was successful.
+        
+        Should return a boolean indicating if the graph was altered.
+        
+        Args:
+            model (ModelGraph): Model to optimize
+            node (Layer): The matched node in the model graph
+        """
+        raise NotImplementedError
+```
+
+From `hls4ml/model/optimizer/optimizer.py:8-33`
+
+### Pass Types
+
+#### Standard OptimizerPass
+
+The standard pass matches specific nodes and transforms them:
+
+```python
+class FuseBatchNormalization(OptimizerPass):
+    """Merge BatchNormalization layer with Dense or Conv layer."""
+    
+    def match(self, node):
+        prev_node = node.get_input_node()
+        basic_match = (
+            isinstance(node, BatchNormalization) and
+            isinstance(prev_node, (Dense, Conv1D, Conv2D)) and
+            isinstance(prev_node.get_output_variable().type.precision,
+                      UnspecifiedPrecisionType)
+        )
+        if basic_match:
+            # Additional compatibility checks
+            s0 = prev_node.weights['weight'].data_unquantized
+            b0 = prev_node.weights['bias'].data_unquantized
+            s1 = node.weights['scale'].data_unquantized
+            b1 = node.weights['bias'].data_unquantized
+            
+            scale_compatible = (
+                (prev_node.get_attr('weight_quantizer') is None and
+                 node.get_attr('scale_quantizer') is None) or
+                ((s0 == np.ones_like(s0)).all() and
+                 prev_node.get_attr('weight_quantizer') is None) or
+                ((s1 == np.ones_like(s1)).all() and
+                 node.get_attr('scale_quantizer') is None)
+            )
+            
+            bias_compatible = (
+                (prev_node.get_attr('bias_quantizer') is None and
+                 node.get_attr('bias_quantizer') is None) or
+                ((b0 == np.zeros_like(b0)).all() and
+                 prev_node.get_attr('bias_quantizer') is None) or
+                ((b1 == np.zeros_like(b1)).all() and
+                 node.get_attr('bias_quantizer') is None)
+            )
+            
+            return scale_compatible and bias_compatible
+        else:
+            return False
+    
+    def transform(self, model, node):
+        """Fuse weight and bias with BN values."""
+        parent_node = node.get_input_node()
+        parent_map = parent_node.get_output_use_map()
+        
+        # Only fuse if parent has single consumer
+        if len(parent_map[parent_node.outputs[0]]) > 1:
+            return False
+        
+        parent_weight = parent_node.weights['weight']
+        parent_bias = parent_node.weights['bias']
+        bn_scale = node.weights['scale']
+        bn_bias = node.weights['bias']
+        
+        # Compute fused parameters
+        fused_weight = bn_scale.data * parent_weight.data
+        fused_bias = bn_scale.data * parent_bias.data + bn_bias.data
+        
+        # Update parent node with fused parameters
+        parent_node.add_weights_variable(
+            name='weight', var_name='w{index}',
+            data=fused_weight, quantizer=w_quantizer
+        )
+        parent_node.add_weights_variable(
+            name='bias', var_name='b{index}',
+            data=fused_bias, quantizer=b_quantizer
+        )
+        
+        # Remove BN node from graph
+        model.remove_node(node)
+        return True
+```
+
+From `hls4ml/model/optimizer/passes/bn_fuse.py:8-99`
+
+#### GlobalOptimizerPass
+
+Matches every node in the graph:
+
+```python
+class GlobalOptimizerPass(OptimizerPass):
+    """Global optimizer that matches on every node in the model graph."""
+    
+    def match(self, node):
+        return True  # Match everything
+```
+
+From `hls4ml/model/optimizer/optimizer.py:43-47`
+
+#### LayerOptimizerPass
+
+Optimizes a specific layer type:
+
+```python
+class LayerOptimizerPass(WrappedOptimizerPass):
+    """An optimizer specific to a layer class.
+    
+    Commonly used by backends to add extra initialization.
+    """
+    
+    def __init__(self, name, layer_class, transform):
+        super().__init__(
+            name,
+            lambda node: isinstance(node, layer_class),
+            transform
+        )
+        self.layer_class = layer_class
+```
+
+From `hls4ml/model/optimizer/optimizer.py:72-80`
+
+#### ModelOptimizerPass
+
+Operates on the entire model:
+
+```python
+class ModelOptimizerPass(OptimizerPass):
+    """A special optimizer that works with the model itself.
+    
+    Examples include writing the model to C++/HLS.
+    """
+    
+    def __init__(self, name, transform):
+        self.name = name
+        self.transform_func = transform
+    
+    def transform(self, model):
+        retval = self.transform_func(model)
+        return retval if retval is not None else False
+```
+
+From `hls4ml/model/optimizer/optimizer.py:83-95`
+
+#### ConfigurableOptimizerPass
+
+Pass with configurable parameters:
+
+```python
+class ConfigurableOptimizerPass(OptimizerPass):
+    """An optimizer that can be configured.
+    
+    Existing instances can be configured with the configure() method.
+    """
+    
+    def configure(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+    
+    def get_config(self):
+        attrs = vars(self)
+        return attrs.copy()
+```
+
+From `hls4ml/model/optimizer/optimizer.py:98-111`
+
+### Decorator-Based Passes
+
+Passes can be defined using decorators:
+
+```python
+# Layer-specific optimizer
+@layer_optimizer(MyLayer)
+def init_mylayer(layer):
+    layer.set_attr('new_attribute', 'some_value')
+
+# Model-level optimizer
+@model_optimizer()
+def write_model(model):
+    model.config.backend.write(model)
+
+# Custom condition optimizer
+@optimizer_pass(lambda node: node.get_attr('some_flag'))
+def optimize_flagged(node):
+    # Transform node
+    pass
+```
+
+From `hls4ml/model/optimizer/optimizer.py:114-150`
+
+## Flow System
+
+### Flow Class
+
+A flow is a collection of optimizer passes with optional dependencies:
+
+```python
+class Flow:
+    """Collection of optimizers with optional dependencies."""
+    
+    def __init__(self, name, optimizers, requires=None):
+        """Create a new flow.
+        
+        Args:
+            name (str): Unique name of the flow
+            optimizers (list): List of optimizer pass names
+            requires (list, optional): List of flows that must run first
+        """
+        self.name = name
+        if optimizers is None:
+            self._optimizers = []
+        else:
+            self._optimizers = optimizers
+        
+        if requires is None:
+            self.requires = []
+        else:
+            self.requires = requires
+    
+    @property
+    def optimizers(self):
+        return self._optimizers
+```
+
+From `hls4ml/model/flow/flow.py:1-24`
+
+### DynamicFlow
+
+A flow that dynamically determines its optimizers:
+
+```python
+class DynamicFlow(Flow):
+    """A dynamically updated flow.
+    
+    Gets optimizer list by calling a function. Useful for representing
+    all available optimizers of a certain type.
+    """
+    
+    def __init__(self, name, optimizer_func, requires=None):
+        """Create a new dynamic flow.
+        
+        Args:
+            name (str): Unique name
+            optimizer_func (callable): Function to get optimizer list
+            requires (list, optional): Required flows
+        """
+        self.name = name
+        self._optimizer_func = optimizer_func
+        self._added_optimizers = set()
+        self._removed_optimizers = set()
+        
+        if requires is None:
+            self.requires = []
+        else:
+            self.requires = requires
+    
+    @property
+    def optimizers(self):
+        optimizers = self._optimizer_func()
+        optimizers.extend(self._added_optimizers)
+        optimizers = [o for o in optimizers 
+                     if o not in self._removed_optimizers]
+        return optimizers
+```
+
+From `hls4ml/model/flow/flow.py:33-62`
+
+### Registering Flows
+
+```python
+def register_flow(name, optimizers, requires=None, backend=None):
+    """Create a flow and add it to the registry.
+    
+    Args:
+        name (str): Flow name
+        optimizers (list): List of optimizer pass names
+        requires (list, optional): Required flows
+        backend (str, optional): Backend name to prefix
+    
+    Returns:
+        str: The registered flow name
+    """
+    if backend is not None and not name.startswith(backend.lower()):
+        name = backend.lower() + ':' + name
+    
+    if name in flow_map:
+        raise Exception(f'Flow {name} already registered')
+    
+    if callable(optimizers):
+        flow = DynamicFlow(name, optimizer_func=optimizers, 
+                          requires=requires)
+    else:
+        flow = Flow(name, optimizers=optimizers, requires=requires)
+    
+    flow_map[name] = flow
+    return name
+```
+
+From `hls4ml/model/flow/flow.py:81-109`
+
+## Applying Flows
+
+### Basic Application
+
+```python
+def apply_flow(self, flow, reapply='single'):
+    """Apply a flow (collection of optimizers).
+    
+    Args:
+        flow (str): Name of the flow to apply
+        reapply (str, optional): How to handle already-applied flows:
+            - 'all': Apply flow and all requirements
+            - 'single': Apply only the flow, skip applied requirements
+            - 'none': Skip if already applied
+            Defaults to 'single'
+    """
+    assert reapply in ['all', 'single', 'none']
+    
+    if reapply == 'all':
+        applied_flows = {}
+    elif reapply == 'single':
+        applied_flows = self._all_applied_flows()
+        applied_flows.pop(flow, None)
+    else:  # reapply == 'none'
+        applied_flows = self._all_applied_flows()
+        if flow in applied_flows:
+            return
+    
+    self._applied_flows.append(applied_flows)
+    self._apply_sub_flow(flow, applied_flows)
+```
+
+From `hls4ml/model/graph.py:485-519`
+
+### Flow Execution
+
+```python
+def _apply_sub_flow(self, flow_name, applied_flows):
+    """Apply a flow and its dependencies recursively."""
+    if flow_name in applied_flows:
+        return
+    
+    flow = get_flow(flow_name)
+    
+    # Apply required flows first
+    for sub_flow in flow.requires:
+        if sub_flow not in applied_flows.keys():
+            self._apply_sub_flow(sub_flow, applied_flows)
+    
+    # Apply this flow's optimizers
+    if len(flow.optimizers) > 0:
+        applied_passes = optimize_model(self, flow.optimizers)
+    else:
+        applied_passes = set()
+    
+    applied_flows[flow.name] = applied_passes
+```
+
+From `hls4ml/model/graph.py:521-534`
+
+### Optimization Loop
+
+```python
+def optimize_model(model, passes):
+    """Optimize a model with the given passes.
+    
+    Passes are attempted until all passes no longer match or no changes occur.
+    
+    Args:
+        model (ModelGraph): The model to optimize
+        passes (list): List of pass names to apply
+    
+    Returns:
+        set: The set of applied passes
+    """
+    optimizers = {opt_pass: get_optimizer(opt_pass) 
+                 for opt_pass in passes}
+    applied_passes = set()
+    optimization_done = False
+    
+    while not optimization_done:
+        for opt_name, opt in optimizers.items():
+            # Handle ModelOptimizerPass
+            if isinstance(opt, ModelOptimizerPass):
+                if opt_name not in applied_passes:
+                    res = opt.transform(model)
+                    if res:
+                        applied_passes.add(opt_name)
+                continue
+            
+            # Try to match and transform each node
+            for node in model.graph.values():
+                if opt.match(node):
+                    res = opt.transform(model, node)
+                    applied_passes.add(opt_name)
+                    if res:  # Graph was modified
+                        break
+            else:
+                # No match found for this optimizer
+                continue
+            
+            # Graph was modified, restart outer loop
+            break
+        else:
+            # All optimizers checked, no modifications
+            optimization_done = True
+    
+    return applied_passes
+```
+
+From `hls4ml/model/optimizer/optimizer.py:294-329`
+
+## Common Optimization Patterns
+
+### Layer Fusion
+
+Combining multiple layers into one:
+
+```python
+class FuseBatchNormalization(OptimizerPass):
+    def match(self, node):
+        # Check if BN follows Dense/Conv
+        prev_node = node.get_input_node()
+        return (
+            isinstance(node, BatchNormalization) and
+            isinstance(prev_node, (Dense, Conv1D, Conv2D))
+        )
+    
+    def transform(self, model, node):
+        parent = node.get_input_node()
+        # Compute fused parameters
+        fused_weight = bn_scale.data * parent_weight.data
+        fused_bias = bn_scale.data * parent_bias.data + bn_bias.data
+        # Update parent and remove BN node
+        model.remove_node(node)
+        return True
+```
+
+### Layer Expansion
+
+Splitting one layer into multiple:
+
+```python
+class ExpandLayer(OptimizerPass):
+    def match(self, node):
+        return isinstance(node, ComplexLayer)
+    
+    def transform(self, model, node):
+        # Create simpler sub-layers
+        layer1 = model.make_node('SubLayer1', ...)
+        layer2 = model.make_node('SubLayer2', ...)
+        
+        # Replace complex layer with sequence
+        model.split_node(node, layer1, layer2)
+        return True
+```
+
+### Type Inference
+
+Automatically determining precisions:
+
+```python
+class InferPrecision(GlobalOptimizerPass):
+    def transform(self, model, node):
+        # Infer output precision from input and weights
+        inp_precision = node.get_input_variable().type.precision
+        weight_precision = node.weights['weight'].type.precision
+        
+        # Calculate required output precision
+        output_precision = calculate_precision(
+            inp_precision, weight_precision
+        )
+        
+        # Update node's output type
+        node.set_attr('result_t', 
+                     NamedType(f'{node.name}_result_t', 
+                              output_precision))
+        return False  # Don't break optimization loop
+```
+
+### Backend-Specific Optimization
+
+```python
+class VivadoOptimization(OptimizerPass):
+    def match(self, node):
+        return (
+            isinstance(node, Conv2D) and
+            model.config.backend.name == 'Vivado'
+        )
+    
+    def transform(self, model, node):
+        # Add Vivado-specific attributes
+        node.set_attr('implementation', 'LineBuffer')
+        node.set_attr('partition_mode', 'cyclic')
+        return False
+```
+
+## Pass Registration
+
+### Registering a Pass
+
+```python
+def register_pass(name, opt_cls, backend=None):
+    """Register a new optimizer pass.
+    
+    Args:
+        name (str): Name of the optimizer
+        opt_cls (class): The optimizer class
+        backend (str, optional): Backend to register to
+    
+    Returns:
+        str: The registered optimizer name
+    """
+    if backend is not None and not name.startswith(backend.lower() + ':'):
+        name = backend.lower() + ':' + name
+    
+    if name in optimizer_map:
+        raise Exception(f'Optimization pass {name} already registered')
+    
+    if inspect.isclass(opt_cls):
+        opt = opt_cls()
+    else:
+        opt = opt_cls
+    
+    optimizer_map[name] = opt
+    return name
+```
+
+From `hls4ml/model/optimizer/optimizer.py:225-252`
+
+### Automatic Registration
+
+Passes in the `passes/` directory are automatically discovered:
+
+```python
+def extract_optimizers_from_path(opt_path, module_path, initializer=None):
+    """Extract optimizer passes from a directory."""
+    optimizers = {}
+    
+    for module in os.listdir(opt_path):
+        if module == '__init__.py' or module[-3:] != '.py':
+            continue
+        
+        try:
+            lib = importlib.import_module(module_path + module[:-3])
+            
+            # Look for register function
+            if 'register_' + module[:-3] in lib.__dict__:
+                opt_init_func = lib.__dict__['register_' + module[:-3]]
+                opt_init_func(initializer)
+            else:
+                # Auto-discover OptimizerPass classes
+                for func in list(lib.__dict__.values()):
+                    if (inspect.isclass(func) and 
+                        issubclass(func, OptimizerPass) and
+                        func.__module__ == lib.__name__):
+                        
+                        func_instance = func()
+                        optimizers[func_instance.get_name()] = func_instance
+        
+        except ImportError as e:
+            print(f'WARN: Unable to import optimizer from {module}: {e}')
+            continue
+    
+    return optimizers
+```
+
+From `hls4ml/model/optimizer/optimizer.py:156-192`
+
+## Example: Custom Flow
+
+### Defining a Custom Flow
+
+```python
+# Define optimization passes
+class MyCustomPass(OptimizerPass):
+    def match(self, node):
+        return isinstance(node, MyLayerType)
+    
+    def transform(self, model, node):
+        # Custom transformation logic
+        node.set_attr('optimized', True)
+        return False
+
+# Register the pass
+register_pass('my_custom_pass', MyCustomPass, backend='Vivado')
+
+# Create a flow
+register_flow(
+    'my_optimization_flow',
+    optimizers=[
+        'infer_precision',
+        'my_custom_pass',
+        'vivado:apply_templates'
+    ],
+    requires=['vivado:init_layers'],
+    backend='Vivado'
+)
+
+# Apply the flow
+model.apply_flow('vivado:my_optimization_flow')
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Return True Only When Graph Changes">
+    Return `True` from `transform()` only when you modify the graph structure (add/remove/replace nodes). Return `False` for attribute-only changes to allow other passes to continue.
+  </Accordion>
+  
+  <Accordion title="Check Parent/Child Usage">
+    Before removing or modifying a node, check if it has multiple consumers using `get_output_use_map()` to avoid breaking the graph.
+  </Accordion>
+  
+  <Accordion title="Validate Transformations">
+    Always validate shape compatibility and type compatibility when replacing or removing nodes.
+  </Accordion>
+  
+  <Accordion title="Use Flow Dependencies">
+    Specify flow dependencies with `requires` to ensure passes run in the correct order.
+  </Accordion>
+  
+  <Accordion title="Make Passes Idempotent">
+    Design passes to be safely re-applied. The optimization loop may run passes multiple times.
+  </Accordion>
+</AccordionGroup>
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Intermediate Representation" icon="layer-group" href="/internals/ir">
+    Learn about Layer classes and attributes
+  </Card>
+  <Card title="Model Graph" icon="diagram-project" href="/internals/model-graph">
+    Understand graph operations and structure
+  </Card>
+</CardGroup>

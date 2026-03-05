@@ -1,0 +1,596 @@
+---
+title: 'Catapult Backend'
+description: 'Deploy neural networks on FPGAs and ASICs using Siemens Catapult HLS'
+icon: 'microchip'
+---
+
+## Overview
+
+The **Catapult** backend enables deployment of neural networks on both FPGAs and ASICs using Siemens Catapult HLS compiler. It supports flexible targeting of FPGA devices or ASIC technology libraries, making it suitable for both prototyping and production designs.
+
+### When to Use Catapult Backend
+
+- **ASIC design flows**: Target standard cell libraries for ASIC implementation
+- **FPGA prototyping**: Use Xilinx or other FPGA devices
+- **Advanced HLS features**: Leverage Catapult's optimization capabilities
+- **Multi-target projects**: Design once, deploy to FPGA or ASIC
+
+<Note>
+  Catapult HLS support was added in hls4ml version 1.0.0 and continues to receive active development.
+</Note>
+
+## Installation and Setup
+
+### Prerequisites
+
+- **Siemens Catapult HLS** (ensure `catapult` is on PATH or set `MGC_HOME` or `CATAPULT_HOME`)
+- Python 3.8 or higher
+- hls4ml library installed
+- FPGA or ASIC technology libraries
+
+### Environment Setup
+
+```bash
+# Option 1: catapult on PATH
+export PATH=/path/to/catapult/bin:$PATH
+command -v catapult
+
+# Option 2: Set MGC_HOME
+export MGC_HOME=/path/to/mentor/catapult
+
+# Option 3: Set CATAPULT_HOME
+export CATAPULT_HOME=/path/to/catapult
+```
+
+## Configuration
+
+### Basic Configuration
+
+Create a model configuration for the Catapult backend:
+
+```python
+import hls4ml
+
+config = hls4ml.utils.config_from_keras_model(
+    model,
+    granularity='name',
+    backend='Catapult'
+)
+
+# Convert model for FPGA target
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='my_catapult_project',
+    backend='Catapult',
+    tech='fpga',
+    part='xcku115-flvb2104-2-i',
+    clock_period=5,
+    io_type='io_parallel'
+)
+
+# Or convert for ASIC target
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='my_asic_project',
+    backend='Catapult',
+    tech='asic',
+    asiclibs='nangate-45nm',
+    clock_period=5,
+    io_type='io_parallel'
+)
+```
+
+### Configuration Options
+
+<ParamField path="tech" type="string" default="fpga">
+  Target technology:
+  - `fpga`: FPGA implementation
+  - `asic`: ASIC implementation
+</ParamField>
+
+<ParamField path="part" type="string" default="xcvu13p-flga2577-2-e">
+  FPGA part number (when tech='fpga')
+</ParamField>
+
+<ParamField path="asiclibs" type="string" default="nangate-45nm">
+  ASIC technology library (when tech='asic'):
+  - `nangate-45nm`
+  - `nangate-15nm`
+  - Custom library name
+</ParamField>
+
+<ParamField path="clock_period" type="int" default="5">
+  Clock period in nanoseconds
+</ParamField>
+
+<ParamField path="fifo" type="int" default="None">
+  FIFO depth for streaming designs
+</ParamField>
+
+<ParamField path="io_type" type="string" default="io_parallel">
+  I/O implementation type:
+  - `io_parallel`: Parallel data processing
+  - `io_stream`: Streaming dataflow architecture
+</ParamField>
+
+### Layer Configuration
+
+#### Strategy Options
+
+```python
+config['Model']['Strategy'] = 'Resource'  # or 'Latency'
+
+# Per-layer configuration
+config['dense_layer'] = {
+    'ReuseFactor': 16,
+    'Strategy': 'Resource',  # 'Latency' or 'Resource'
+    'Precision': 'ac_fixed<16,6>',
+    'accum_t': 'ac_fixed<24,12>'
+}
+```
+
+#### Dense Layers
+
+```python
+config['dense_layer'] = {
+    'ReuseFactor': 8,
+    'Strategy': 'Resource',
+    'Precision': 'ac_fixed<16,6>'
+}
+```
+
+#### Convolutional Layers
+
+```python
+config['conv2d_layer'] = {
+    'ReuseFactor': 8,
+    'Strategy': 'Resource',
+    'ParallelizationFactor': 4,
+    'ConvImplementation': 'LineBuffer',  # or 'Encoded'
+    'Precision': 'ac_fixed<16,6>'
+}
+```
+
+**Convolution Implementations:**
+- `LineBuffer`: Streaming line buffer (efficient for io_stream)
+- `Encoded`: Encoded implementation for io_parallel
+
+#### Recurrent Layers
+
+```python
+config['lstm_layer'] = {
+    'ReuseFactor': 1,
+    'RecurrentReuseFactor': 1,
+    'Strategy': 'Resource',
+    'static': True,  # Static vs dynamic unrolling
+    'table_size': 1024,
+    'table_t': 'ac_fixed<18,8>'
+}
+```
+
+#### Separable Convolution
+
+```python
+config['sepconv2d_layer'] = {
+    'ReuseFactor': 8,
+    'Strategy': 'Resource',
+    'dw_output': 'ac_fixed<16,8>',  # Depthwise output precision
+    'ConvImplementation': 'LineBuffer'
+}
+```
+
+## Build Process
+
+### Synthesis Commands
+
+```python
+# Compile the model
+hls_model.compile()
+
+# Build with Catapult HLS
+report = hls_model.build(
+    reset=False,      # Reset project
+    csim=True,        # C simulation
+    synth=True,       # HLS synthesis
+    cosim=False,      # RTL co-simulation
+    validation=False, # Validation
+    export=False,     # Export RTL
+    vsynth=False,     # FPGA/ASIC synthesis
+    fifo_opt=False,   # FIFO optimization
+    bitfile=False,    # Generate bitfile
+    vhdl=False,       # Generate VHDL
+    verilog=True,     # Generate Verilog
+    ran_frame=5,      # Random test frames
+    sw_opt=False,     # Software optimization
+    power=False,      # Power analysis
+    da=False,         # Design Analyzer
+    bup=False         # Backup project
+)
+```
+
+### Build Options
+
+<Accordion title="Catapult Build Parameters">
+
+| Option | Description | Default |
+|--------|-------------|----------|
+| `reset` | Reset project before building | `False` |
+| `csim` | Run C simulation | `True` |
+| `synth` | Run HLS synthesis | `True` |
+| `cosim` | Run RTL co-simulation | `False` |
+| `validation` | Run validation tests | `False` |
+| `export` | Export RTL | `False` |
+| `vsynth` | Run downstream synthesis | `False` |
+| `fifo_opt` | Optimize FIFO depths | `False` |
+| `bitfile` | Generate FPGA bitfile | `False` |
+| `vhdl` | Generate VHDL output | `False` |
+| `verilog` | Generate Verilog output | `True` |
+| `ran_frame` | Number of random test frames | `5` |
+| `sw_opt` | Software optimization | `False` |
+| `power` | Power analysis | `False` |
+| `da` | Design Analyzer | `False` |
+| `bup` | Backup project | `False` |
+
+</Accordion>
+
+### Build Script
+
+Catapult uses a TCL script for building:
+
+```bash
+cd my_catapult_project
+catapult -product ultra -shell -f build_prj.tcl -eval 'set ::argv "synth=1 csim=1"'
+```
+
+## Example Project Structure
+
+```
+my_catapult_project/
+├── firmware/
+│   ├── myproject.cpp          # Top-level implementation
+│   ├── myproject.h            # Header declarations
+│   ├── parameters.h           # Network parameters
+│   ├── defines.h              # Macro definitions
+│   ├── weights/               # Weight data
+│   └── nnet_utils/            # Utility functions
+├── tb_data/
+│   ├── tb_input_features.dat
+│   └── tb_output_predictions.dat
+├── myproject_test.cpp         # Testbench
+├── build_prj.tcl              # Catapult HLS script
+└── Catapult/                  # Catapult project (after build)
+    ├── myproject.v1/
+    │   ├── concat_rtl.v       # Generated RTL
+    │   ├── scverify/          # Verification files
+    │   └── cycle_reports/     # Timing reports
+    └── catapult.log
+```
+
+## Precision Types
+
+Catapult backend uses Algorithmic C (AC) datatypes:
+
+```python
+# Fixed-point: ac_fixed<width, int_width, signed, quantization, overflow>
+config['layer']['Precision'] = 'ac_fixed<16,6,true>'
+config['layer']['accum_t'] = 'ac_fixed<24,12,true>'
+
+# Integer: ac_int<width, signed>
+config['layer']['index_t'] = 'ac_int<8,false>'
+```
+
+### Common Precision Configurations
+
+```python
+# 16-bit fixed-point
+config['layer']['Precision'] = 'ac_fixed<16,6,true>'  # 6 integer bits
+
+# 8-bit quantized
+config['layer']['Precision'] = 'ac_fixed<8,3,true>'   # 3 integer bits
+
+# Wide accumulator
+config['layer']['accum_t'] = 'ac_fixed<32,16,true>'   # 16 integer bits
+```
+
+## Performance Optimization
+
+### Dataflow Architecture
+
+<Warning>
+  Convolution layers in Catapult require **dataflow pipeline style** for proper operation.
+</Warning>
+
+```python
+# Automatically set for models with convolutions
+config['Model']['PipelineStyle'] = 'dataflow'
+
+# This enables:
+# - Parallel execution of layers
+# - Streaming between layers
+# - Optimal throughput
+```
+
+### FIFO Optimization
+
+For streaming designs:
+
+```python
+# Build with FIFO optimization
+report = hls_model.build(
+    synth=True,
+    fifo_opt=True  # Optimize FIFO depths
+)
+
+# Or specify FIFO depth in config
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    backend='Catapult',
+    fifo=32  # Set FIFO depth
+)
+```
+
+### Reuse Factor Tuning
+
+```python
+# Aggressive parallelization
+config['conv2d']['ReuseFactor'] = 1
+config['conv2d']['ParallelizationFactor'] = 8
+
+# Balanced approach
+config['conv2d']['ReuseFactor'] = 8
+config['conv2d']['ParallelizationFactor'] = 4
+
+# Resource-constrained
+config['conv2d']['ReuseFactor'] = 64
+config['conv2d']['ParallelizationFactor'] = 1
+```
+
+## ASIC Design Flow
+
+### Technology Library Setup
+
+```python
+# Configure for ASIC
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    backend='Catapult',
+    tech='asic',
+    asiclibs='nangate-45nm',  # or your technology library
+    clock_period=2.0  # Faster clock for ASIC (2ns = 500MHz)
+)
+```
+
+### ASIC-Specific Optimizations
+
+```python
+# Lower reuse factors for ASIC (more area available)
+config['Model']['ReuseFactor'] = 4
+
+# Tighter precision for area optimization
+config['Model']['Precision'] = 'ac_fixed<12,4>'
+
+# Enable power analysis
+report = hls_model.build(
+    synth=True,
+    power=True  # Analyze power consumption
+)
+```
+
+## Performance Characteristics
+
+### Resource Usage Estimates
+
+**FPGA (Small MLP):**
+- LUTs: 8K-20K
+- FFs: 5K-15K
+- DSPs: 15-40
+- BRAM: 10-30
+
+**ASIC (Small MLP on 45nm):**
+- Area: 0.2-0.5 mm²
+- Gates: 50K-150K
+- Memory: 50-200 KB
+
+### Latency Patterns
+
+**io_parallel:**
+```
+Latency = Σ(layer_latency)
+II = 1 (fully pipelined)
+```
+
+**io_stream with dataflow:**
+```
+Throughput = 1 / max(layer_II)
+Pipeline stages = number of layers
+```
+
+### Clock Frequencies
+
+**FPGA:**
+- Xilinx UltraScale+: 200-350 MHz
+- Intel Stratix 10: 250-400 MHz
+
+**ASIC:**
+- 45nm: 300-600 MHz
+- 28nm: 500-1000 MHz
+- 7nm: 1-2 GHz
+
+## Advanced Features
+
+### Winograd Kernel Transformation
+
+Automatic optimization for 3x3 convolutions:
+
+```python
+# Enabled automatically during optimization passes
+# Reduces multiplications for 3x3 convolutions
+# Particularly beneficial for ASIC implementations
+```
+
+### im2col Code Generation
+
+For efficient convolution implementation:
+
+```python
+config['conv2d']['ConvImplementation'] = 'LineBuffer'
+# Generates im2col transformation for matrix multiplication
+```
+
+### Custom Resource Strategies
+
+```python
+# Mixed strategy design
+config['conv2d_1']['Strategy'] = 'Latency'  # Unrolled
+config['conv2d_2']['Strategy'] = 'Resource'  # Serialized
+config['dense_1']['Strategy'] = 'Resource'   # Serialized
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Catapult HLS not found">
+    ```bash
+    # Check installation paths
+    echo $MGC_HOME
+    echo $CATAPULT_HOME
+    which catapult
+    
+    # Set environment variable
+    export MGC_HOME=/path/to/mentor/catapult
+    # or
+    export CATAPULT_HOME=/path/to/catapult
+    
+    # Verify
+    $MGC_HOME/bin/catapult -version
+    ```
+  </Accordion>
+
+  <Accordion title="Dataflow pipeline error with convolutions">
+    ```python
+    # Catapult requires dataflow for convolutions
+    # This is set automatically, but if you see errors:
+    
+    config['Model']['PipelineStyle'] = 'dataflow'
+    
+    # Rebuild the model
+    hls_model = hls4ml.converters.convert_from_keras_model(
+        model, hls_config=config, backend='Catapult'
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="FIFO depth issues">
+    ```python
+    # If you see FIFO overflow/underflow warnings:
+    
+    # Option 1: Set explicit FIFO depth
+    hls_model = hls4ml.converters.convert_from_keras_model(
+        model, backend='Catapult', fifo=64
+    )
+    
+    # Option 2: Enable FIFO optimization
+    report = hls_model.build(fifo_opt=True)
+    ```
+  </Accordion>
+
+  <Accordion title="Timing violations in ASIC flow">
+    - Increase clock period
+    - Reduce precision to simplify logic
+    - Increase reuse factors
+    - Enable additional pipelining
+    - Check critical paths in reports
+  </Accordion>
+</AccordionGroup>
+
+## Example: Complete Workflow
+
+### FPGA Target
+
+```python
+import hls4ml
+from tensorflow import keras
+import numpy as np
+
+# Load model
+model = keras.models.load_model('my_cnn.h5')
+
+# Create configuration
+config = hls4ml.utils.config_from_keras_model(model, granularity='name')
+config['Model']['Strategy'] = 'Resource'
+config['Model']['ReuseFactor'] = 16
+
+# Convert to Catapult HLS
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='catapult_fpga',
+    backend='Catapult',
+    tech='fpga',
+    part='xcku115-flvb2104-2-i',
+    clock_period=5,
+    io_type='io_stream'
+)
+
+# Build and synthesize
+hls_model.compile()
+report = hls_model.build(
+    csim=True,
+    synth=True,
+    cosim=False,
+    export=True,
+    verilog=True
+)
+
+print(f"Resources: LUT={report['LUT']}, FF={report['FF']}, DSP={report['DSP']}")
+```
+
+### ASIC Target
+
+```python
+# Configure for ASIC
+hls_model_asic = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='catapult_asic',
+    backend='Catapult',
+    tech='asic',
+    asiclibs='nangate-45nm',
+    clock_period=2.0,  # 500 MHz
+    io_type='io_stream'
+)
+
+# Build with power analysis
+hls_model_asic.compile()
+report_asic = hls_model_asic.build(
+    csim=True,
+    synth=True,
+    export=True,
+    verilog=True,
+    power=True  # Power analysis for ASIC
+)
+
+print(f"Area: {report_asic['Area']} um^2")
+print(f"Power: {report_asic['Power']} mW")
+```
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Vivado Backend" icon="microchip" href="/backends/vivado">
+    Alternative Xilinx FPGA backend
+  </Card>
+  <Card title="Advanced Optimization" icon="diagram-project" href="/advanced/optimization">
+    Optimize model performance
+  </Card>
+  <Card title="HLS Backends" icon="chip" href="/concepts/hls-backends">
+    Compare different backends
+  </Card>
+  <Card title="Precision Guide" icon="bullseye" href="/concepts/precision-optimization">
+    Configure numeric precision
+  </Card>
+</CardGroup>

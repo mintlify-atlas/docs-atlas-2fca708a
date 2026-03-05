@@ -1,0 +1,448 @@
+---
+title: 'Graph Structure'
+description: 'Layer graph and data flow management'
+---
+
+## Graph Architecture
+
+The ModelGraph uses an OrderedDict to maintain layers as nodes in a directed acyclic graph (DAG). Each layer connects to other layers through named input/output variables.
+
+```python
+# Graph structure
+model.graph = OrderedDict([
+    ('input1', InputLayer),
+    ('dense1', Dense),
+    ('relu1', Activation),
+    ('output', Dense)
+])
+```
+
+## Layer Representation
+
+Each layer in the graph is represented by a Layer object with:
+
+- **Name**: Unique identifier
+- **Class**: Layer type (Dense, Conv2D, etc.)
+- **Attributes**: Configuration parameters
+- **Inputs**: List of input variable names
+- **Outputs**: List of output variable names
+- **Weights**: Weight and bias variables
+
+### Example Layer
+
+```python
+# Accessing a layer
+layer = model.graph['dense_1']
+
+print(f"Name: {layer.name}")
+print(f"Type: {layer.class_name}")
+print(f"Inputs: {layer.inputs}")
+print(f"Outputs: {layer.outputs}")
+print(f"Attributes: {layer.attributes}")
+
+# Get layer parameters
+n_in = layer.get_attr('n_in')
+n_out = layer.get_attr('n_out')
+print(f"Shape: {n_in} -> {n_out}")
+```
+
+## Data Flow
+
+### Variables
+
+Data flows between layers through Variable objects:
+
+```python
+class Variable:
+    name: str          # Variable name
+    type: Type         # Data type (precision)
+    shape: tuple       # Tensor shape
+    pragma: str        # HLS pragma (partition, stream, etc.)
+```
+
+### Example
+
+```python
+# Get input variable
+input_var = model.get_input_variables()[0]
+print(f"Input: {input_var.name}")
+print(f"Shape: {input_var.shape}")
+print(f"Type: {input_var.type.precision}")
+
+# Get layer output
+layer = model.graph['dense_1']
+output_var = layer.get_output_variable()
+print(f"Output: {output_var.name}")
+print(f"Shape: {output_var.shape}")
+print(f"Type: {output_var.type.precision}")
+```
+
+## Graph Navigation
+
+### Forward Traversal
+
+```python
+# Iterate through layers in order
+for layer in model.get_layers():
+    print(f"Processing: {layer.name}")
+    
+    # Get input layers
+    for inp in layer.inputs:
+        input_layer = model.graph[inp] if inp in model.graph else None
+        if input_layer:
+            print(f"  <- {input_layer.name}")
+```
+
+### Backward Traversal
+
+```python
+# Find layers that use this layer's output
+layer = model.graph['dense_1']
+output_name = layer.outputs[0]
+
+next_layers = []
+for candidate in model.get_layers():
+    if output_name in candidate.inputs:
+        next_layers.append(candidate)
+        print(f"{layer.name} -> {candidate.name}")
+```
+
+### Find Dependencies
+
+```python
+def get_all_predecessors(model, layer_name, visited=None):
+    """Recursively find all layers that precede this layer."""
+    if visited is None:
+        visited = set()
+    
+    if layer_name in visited:
+        return visited
+    visited.add(layer_name)
+    
+    layer = model.graph[layer_name]
+    for inp in layer.inputs:
+        if inp in model.graph:
+            get_all_predecessors(model, inp, visited)
+    
+    return visited
+
+# Usage
+predecessors = get_all_predecessors(model, 'output')
+print(f"Layers before output: {predecessors}")
+```
+
+## Graph Modification
+
+### Adding Layers
+
+```python
+import numpy as np
+
+# Get previous layer
+prev_layer = model.graph['dense_1']
+
+# Create new layer
+weights = np.random.randn(64, 32).astype(np.float32)
+bias = np.zeros(32, dtype=np.float32)
+
+new_layer = model.make_node(
+    kind='Dense',
+    name='inserted_dense',
+    attributes={
+        'n_in': 64,
+        'n_out': 32,
+        'weight_data': weights,
+        'bias_data': bias
+    },
+    inputs=prev_layer.outputs,
+    outputs=['inserted_dense']
+)
+
+# Insert into graph
+model.insert_node(new_layer)
+```
+
+### Replacing Layers
+
+```python
+# Replace activation function
+old_layer = model.graph['relu_1']
+
+new_layer = model.make_node(
+    kind='Activation',
+    name='tanh_1',
+    attributes={
+        'activation': 'tanh',
+        'n_in': old_layer.get_attr('n_in')
+    },
+    inputs=old_layer.inputs,
+    outputs=old_layer.outputs
+)
+
+model.replace_node(old_layer, new_layer)
+```
+
+### Removing Layers
+
+```python
+# Remove dropout layer (no-op)
+dropout_layer = model.graph['dropout_1']
+model.remove_node(dropout_layer)
+```
+
+### Splitting Layers
+
+```python
+# Split a layer into two sequential layers
+old_layer = model.graph['combined']
+
+# Create first layer
+layer1 = model.make_node(
+    kind='Dense',
+    name='split_1',
+    attributes={...},
+    inputs=old_layer.inputs,
+    outputs=['split_1_out']
+)
+
+# Create second layer
+layer2 = model.make_node(
+    kind='Activation',
+    name='split_2',
+    attributes={...},
+    inputs=['split_1_out'],
+    outputs=old_layer.outputs
+)
+
+# Replace with two layers
+model.split_node(old_layer, layer1, layer2)
+```
+
+## Multi-Input/Output Models
+
+### Multiple Inputs
+
+```python
+# Model with two inputs
+layer_list = [
+    {'name': 'input1', 'class_name': 'InputLayer', 'input_shape': [10]},
+    {'name': 'input2', 'class_name': 'InputLayer', 'input_shape': [5]},
+    {
+        'name': 'concat',
+        'class_name': 'Concatenate',
+        'inputs': ['input1', 'input2'],
+        'outputs': ['concat']
+    },
+    {'name': 'dense', 'class_name': 'Dense', 'inputs': ['concat']}
+]
+
+model = ModelGraph.from_layer_list(
+    config,
+    layer_list,
+    inputs=['input1', 'input2'],
+    outputs=['dense']
+)
+
+# Predict with multiple inputs
+import numpy as np
+inp1 = np.random.rand(1, 10).astype(np.float32)
+inp2 = np.random.rand(1, 5).astype(np.float32)
+output = model.predict([inp1, inp2])
+```
+
+### Multiple Outputs
+
+```python
+# Model with two outputs
+layer_list = [
+    {'name': 'input', 'class_name': 'InputLayer', 'input_shape': [10]},
+    {'name': 'shared', 'class_name': 'Dense', 'n_in': 10, 'n_out': 64},
+    {
+        'name': 'output1',
+        'class_name': 'Dense',
+        'inputs': ['shared'],
+        'outputs': ['output1'],
+        'n_in': 64,
+        'n_out': 3
+    },
+    {
+        'name': 'output2',
+        'class_name': 'Dense',
+        'inputs': ['shared'],
+        'outputs': ['output2'],
+        'n_in': 64,
+        'n_out': 1
+    }
+]
+
+model = ModelGraph.from_layer_list(
+    config,
+    layer_list,
+    inputs=['input'],
+    outputs=['output1', 'output2']
+)
+
+# Predict returns multiple outputs
+out1, out2 = model.predict(test_input)
+```
+
+## Graph Visualization
+
+### Print Graph Structure
+
+```python
+def print_graph(model):
+    """Print model graph structure."""
+    print("\nModel Graph:")
+    print("=" * 80)
+    
+    for layer in model.get_layers():
+        # Layer info
+        print(f"\n[{layer.name}] {layer.class_name}")
+        
+        # Inputs
+        if layer.inputs:
+            print(f"  Inputs: {', '.join(layer.inputs)}")
+        
+        # Outputs  
+        if layer.outputs:
+            print(f"  Outputs: {', '.join(layer.outputs)}")
+        
+        # Shape information
+        if hasattr(layer, 'get_output_variable'):
+            out_var = layer.get_output_variable()
+            if out_var:
+                print(f"  Shape: {out_var.shape}")
+                print(f"  Precision: {out_var.type.precision}")
+        
+        # Weights
+        weights = layer.get_weights()
+        if weights:
+            for weight in weights:
+                print(f"  {weight.name}: {weight.shape}")
+
+print_graph(model)
+```
+
+### Export Graph to DOT
+
+```python
+def export_dot(model, filename='model_graph.dot'):
+    """Export model graph to Graphviz DOT format."""
+    with open(filename, 'w') as f:
+        f.write('digraph ModelGraph {\n')
+        f.write('  rankdir=TB;\n')
+        f.write('  node [shape=box];\n\n')
+        
+        # Add nodes
+        for layer in model.get_layers():
+            label = f"{layer.name}\n{layer.class_name}"
+            f.write(f'  "{layer.name}" [label="{label}"];\n')
+        
+        # Add edges
+        f.write('\n')
+        for layer in model.get_layers():
+            for inp in layer.inputs:
+                if inp in model.graph:
+                    f.write(f'  "{inp}" -> "{layer.name}";\n')
+        
+        f.write('}\n')
+    
+    print(f"Graph exported to {filename}")
+    print("Visualize with: dot -Tpng model_graph.dot -o model_graph.png")
+
+export_dot(model)
+```
+
+## Graph Validation
+
+### Check Connectivity
+
+```python
+def validate_graph(model):
+    """Validate graph connectivity."""
+    errors = []
+    
+    # Check all inputs exist
+    for layer in model.get_layers():
+        for inp in layer.inputs:
+            if inp not in model.output_vars:
+                errors.append(f"Layer {layer.name} references non-existent input: {inp}")
+    
+    # Check outputs are used
+    for layer in model.get_layers():
+        if layer.name in model.outputs:
+            continue  # Output layer
+        
+        output_used = False
+        for output in layer.outputs:
+            for candidate in model.get_layers():
+                if output in candidate.inputs:
+                    output_used = True
+                    break
+        
+        if not output_used:
+            errors.append(f"Layer {layer.name} output is unused")
+    
+    # Report
+    if errors:
+        print("Graph validation errors:")
+        for error in errors:
+            print(f"  - {error}")
+    else:
+        print("Graph validation passed")
+    
+    return len(errors) == 0
+
+validate_graph(model)
+```
+
+## Advanced Patterns
+
+### Skip Connections
+
+```python
+# Add residual connection
+main_path = model.graph['conv_final']
+shortcut = model.graph['conv_input']
+
+# Create add layer
+add_layer = model.make_node(
+    kind='Merge',
+    name='residual_add',
+    attributes={'op': 'add'},
+    inputs=[main_path.outputs[0], shortcut.outputs[0]],
+    outputs=['residual_add']
+)
+
+model.insert_node(add_layer)
+```
+
+### Shared Weights
+
+```python
+# Use same weights in multiple layers
+base_layer = model.graph['dense_1']
+weights = base_layer.weights['kernel']
+bias = base_layer.weights['bias']
+
+# Create sibling layer with shared weights
+sibling = model.make_node(
+    kind='Dense',
+    name='dense_shared',
+    attributes={
+        'n_in': base_layer.get_attr('n_in'),
+        'n_out': base_layer.get_attr('n_out'),
+        'weight_data': weights.data,
+        'bias_data': bias.data
+    },
+    inputs=['other_input'],
+    outputs=['dense_shared']
+)
+```
+
+## See Also
+
+- [ModelGraph](/api/model/model)
+- [Optimizer](/api/model/optimizer)
+- [Backends](/api/backends/backend)

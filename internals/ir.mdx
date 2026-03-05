@@ -1,0 +1,324 @@
+---
+title: Intermediate Representation (IR)
+description: Understanding hls4ml's layer-based intermediate representation system
+---
+
+The intermediate representation (IR) in hls4ml is built around a **Layer-based architecture** where each layer is a node in the model graph. The IR system provides a flexible way to represent neural network models with rich metadata about types, attributes, weights, and variables.
+
+## Core Components
+
+The IR consists of three main components:
+
+1. **Layer classes** - Nodes in the model graph
+2. **Attributes** - Metadata and configuration for each layer
+3. **Types and Variables** - Precision information and data structures
+
+## Layer Class Architecture
+
+### Base Layer Class
+
+All layers inherit from the `Layer` base class defined in `hls4ml/model/layers.py`:
+
+```python
+class Layer(Serializable):
+    """The base class for all layers, which are the nodes in the model graph.
+    Note: they don't necessarily correspond 1:1 with the network layers.
+    
+    Args:
+        model (ModelGraph): The ModelGraph that this Layer is part of
+        name (str): The node name
+        attributes (dict): Initial set of attributes
+        inputs (list): List of inputs to the layer
+        outputs (list, optional): Optional list of named outputs
+    """
+```
+
+From `hls4ml/model/layers.py:50-62`
+
+### Layer Initialization
+
+When a layer is created, it goes through several initialization steps:
+
+```python
+def __init__(self, model, name, attributes, inputs, outputs=None, initialize=True):
+    self.model: 'ModelGraph' = model
+    self.name = name
+    self.inputs = inputs
+    self.outputs = outputs
+    
+    # Initialize attribute mappings
+    self.attributes = AttributeDict(self)
+    self.attributes.update(attributes)
+    
+    self.weights = WeightMapping(self.attributes)
+    self.variables = VariableMapping(self.attributes)
+    self.types = TypeMapping(self.attributes)
+    self.code = CodeMapping(self.attributes)
+```
+
+From `hls4ml/model/layers.py:85-104`
+
+## Attribute System
+
+The attribute system provides structured metadata for layers. Attributes are defined using the `Attribute` class and its subclasses.
+
+### Attribute Types
+
+<CardGroup cols={2}>
+  <Card title="Attribute" icon="tag">
+    Basic attribute with name, type, and default value
+  </Card>
+  <Card title="ConfigurableAttribute" icon="sliders">
+    User-modifiable attributes like `trace` flag
+  </Card>
+  <Card title="TypeAttribute" icon="code">
+    Stores precision types (e.g., `result_t`, `accum_t`)
+  </Card>
+  <Card title="WeightAttribute" icon="weight-hanging">
+    Stores weight variables for parameters
+  </Card>
+</CardGroup>
+
+### Expected Attributes
+
+Each layer class defines its expected attributes:
+
+```python
+class Dense(Layer):
+    _expected_attributes = [
+        Attribute('n_in'),
+        Attribute('n_out'),
+        WeightAttribute('weight'),
+        WeightAttribute('bias'),
+        TypeAttribute('weight'),
+        TypeAttribute('bias'),
+    ]
+```
+
+From `hls4ml/model/layers.py:490-498`
+
+### Attribute Mappings
+
+The IR provides specialized views of attributes through mapping classes:
+
+```python
+# Access only weight variables
+layer.weights['weight']  # Returns WeightVariable
+
+# Access only output variables  
+layer.variables['layer_out']  # Returns TensorVariable
+
+# Access only type definitions
+layer.types['result_t']  # Returns NamedType
+
+# Access all attributes
+layer.attributes['n_in']  # Returns any attribute value
+```
+
+## Layer Examples
+
+### Input Layer
+
+```python
+class Input(Layer):
+    def initialize(self):
+        shape = self.attributes['input_shape']
+        if shape[0] is None:
+            raise RuntimeError(f'Unexpectedly have a None in {shape=}')
+        
+        type_name = self.attributes.get('type_name', 'input_t')
+        precision, _ = self.model.config.get_precision(self, var='result')
+        
+        self.add_output_variable(shape, var_name=self.name, 
+                                type_name=type_name, precision=precision)
+```
+
+From `hls4ml/model/layers.py:381-392`
+
+### Dense Layer
+
+```python
+class Dense(Layer):
+    _expected_attributes = [
+        Attribute('n_in'),
+        Attribute('n_out'),
+        WeightAttribute('weight'),
+        WeightAttribute('bias'),
+        TypeAttribute('weight'),
+        TypeAttribute('bias'),
+    ]
+    
+    def initialize(self):
+        shape = list(self.get_input_variable().shape)
+        shape[-1] = self.attributes['n_out']
+        self.add_output_variable(shape)
+        
+        # Add weights with quantization
+        self.add_weights(quantizer=self.get_attr('weight_quantizer'),
+                        compression=self.model.config.get_compression(self))
+        self.add_bias(quantizer=self.get_attr('bias_quantizer'))
+```
+
+From `hls4ml/model/layers.py:490-505`
+
+### Convolutional Layer
+
+```python
+class Conv2D(Layer):
+    _expected_attributes = [
+        Attribute('in_height'),
+        Attribute('in_width'),
+        Attribute('out_height'),
+        Attribute('out_width'),
+        Attribute('n_chan'),
+        Attribute('n_filt'),
+        Attribute('filt_height'),
+        Attribute('filt_width'),
+        Attribute('stride_height'),
+        Attribute('stride_width'),
+        Attribute('pad_top'),
+        Attribute('pad_bottom'),
+        Attribute('pad_left'),
+        Attribute('pad_right'),
+        WeightAttribute('weight'),
+        WeightAttribute('bias'),
+        TypeAttribute('weight'),
+        TypeAttribute('bias'),
+    ]
+```
+
+From `hls4ml/model/layers.py:625-644`
+
+## Variables and Types
+
+### Adding Output Variables
+
+Layers create output variables to represent their outputs:
+
+```python
+def add_output_variable(self, shape, out_name=None, 
+                       var_name='layer{index}_out',
+                       type_name='layer{index}_t',
+                       precision=None):
+    if out_name is None:
+        out_name = self.outputs[0]
+    
+    if precision is None:
+        precision, _ = self.model.config.get_precision(self, var='result')
+    
+    out = TensorVariable(shape, var_name=var_name, type_name=type_name,
+                        precision=precision, index=self.index)
+    
+    self.set_attr(out_name, out)
+```
+
+From `hls4ml/model/layers.py:263-279`
+
+### Adding Weight Variables
+
+Layers with parameters add weight variables:
+
+```python
+def add_weights_variable(self, name, var_name=None, type_name=None,
+                        precision=None, data=None, 
+                        quantizer=None, compression=False):
+    if var_name is None:
+        var_name = name + '{index}'
+    
+    if precision is None:
+        precision, _ = self.model.config.get_precision(self, var=name)
+    
+    if data is None:
+        data = self.get_attr(name + '_data')
+    
+    data_unquantized = data
+    if quantizer is not None:
+        precision = quantizer.hls_type
+        type_name = name + '{index}_t'
+        data = quantizer(data)
+    
+    var = WeightVariable(var_name, type_name=type_name,
+                        precision=precision, quantizer=quantizer,
+                        data=data, index=self.index)
+    
+    var.data_unquantized = data_unquantized
+    self.set_attr(name, var)
+```
+
+From `hls4ml/model/layers.py:306-358`
+
+## Accessing Layer Information
+
+### Getting Input/Output Nodes
+
+```python
+# Get the layer that produces an input
+input_node = layer.get_input_node(input_name)
+
+# Get layers that consume this layer's output
+output_nodes = layer.get_output_nodes(output_name)
+
+# Get input/output variables
+input_var = layer.get_input_variable()
+output_var = layer.get_output_variable()
+```
+
+### Accessing Weights and Variables
+
+```python
+# Get all weights
+weights = layer.get_weights()
+
+# Get specific weight
+weight = layer.get_weights('weight')
+
+# Get all variables
+variables = layer.get_variables()
+```
+
+From `hls4ml/model/layers.py:254-261`
+
+## Layer Registration
+
+Layers are registered in a global `layer_map` that maps class names to layer classes. Backends can extend layer classes to add backend-specific functionality:
+
+```python
+# Backend creates specialized version of layer
+layer_cls = self.config.backend.create_layer_class(base_layer_cls)
+
+# Instantiate the layer
+node = layer_cls(model, name, attributes, inputs, outputs, initialize)
+```
+
+From `hls4ml/model/graph.py:570-572`
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Define Expected Attributes">
+    Always define `_expected_attributes` for custom layers to ensure proper validation and initialization.
+  </Accordion>
+  
+  <Accordion title="Use Attribute Types">
+    Use appropriate attribute subclasses (`TypeAttribute`, `WeightAttribute`, etc.) to enable proper handling by the system.
+  </Accordion>
+  
+  <Accordion title="Initialize Variables">
+    Call `add_output_variable()` and `add_weights_variable()` in the `initialize()` method to create proper IR structures.
+  </Accordion>
+  
+  <Accordion title="Access Through Mappings">
+    Use specialized mappings (`layer.weights`, `layer.variables`, `layer.types`) for type-safe attribute access.
+  </Accordion>
+</AccordionGroup>
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Model Graph" icon="diagram-project" href="/internals/model-graph">
+    Learn about graph operations and transformations
+  </Card>
+  <Card title="Optimization Flows" icon="arrows-spin" href="/internals/flows">
+    Understand the optimization pass system
+  </Card>
+</CardGroup>

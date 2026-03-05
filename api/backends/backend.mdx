@@ -1,0 +1,491 @@
+---
+title: 'Backend Base'
+description: 'Base backend class and common functionality'
+---
+
+## Backend
+
+Base class for all HLS backends. Defines the interface for code generation, compilation, and synthesis.
+
+```python
+class Backend:
+    def __init__(self, name):
+        self.name = name
+        self.custom_source = {}
+```
+
+### Attributes
+
+<ResponseField name="name" type="str">
+  Backend identifier (e.g., 'Vivado', 'Vitis', 'Quartus').
+</ResponseField>
+
+<ResponseField name="custom_source" type="dict">
+  Dictionary of custom source files to include in the project.
+</ResponseField>
+
+## Core Methods
+
+### create_initial_config
+
+Generate backend-specific configuration.
+
+```python
+backend.create_initial_config(**kwargs)
+```
+
+<ParamField path="part" type="str" default="None">
+  FPGA part number.
+</ParamField>
+
+<ParamField path="clock_period" type="int" default="5">
+  Clock period in nanoseconds.
+</ParamField>
+
+<ParamField path="io_type" type="str" default="io_parallel">
+  Interface type: `'io_parallel'` or `'io_stream'`.
+</ParamField>
+
+<ResponseField name="config" type="dict">
+  Backend-specific configuration dictionary.
+</ResponseField>
+
+### create_layer_class
+
+Wrap a base layer class with backend-specific attributes.
+
+```python
+backend.create_layer_class(layer_class)
+```
+
+<ParamField path="layer_class" type="class" required>
+  Base layer class to extend.
+</ParamField>
+
+<ResponseField name="wrapped_class" type="class">
+  Backend-specific layer class with additional attributes.
+</ResponseField>
+
+### Example
+
+```python
+from hls4ml.backends import get_backend
+from hls4ml.model.layers import Dense
+
+# Get backend
+backend = get_backend('Vivado')
+
+# Create backend-specific Dense layer
+VivadoDense = backend.create_layer_class(Dense)
+
+# Check additional attributes
+print(VivadoDense._expected_attributes)
+# Shows: reuse_factor, accum_t, etc.
+```
+
+### write
+
+Generate HLS C++ code and write to disk.
+
+```python
+backend.write(model)
+```
+
+<ParamField path="model" type="ModelGraph" required>
+  The model to generate code for.
+</ParamField>
+
+### compile
+
+Compile the project into a shared library.
+
+```python
+backend.compile(model)
+```
+
+<ParamField path="model" type="ModelGraph" required>
+  The model to compile.
+</ParamField>
+
+<ResponseField name="lib_path" type="str">
+  Path to the compiled shared library.
+</ResponseField>
+
+### build
+
+Run HLS synthesis and implementation.
+
+```python
+backend.build(model, **kwargs)
+```
+
+<ParamField path="model" type="ModelGraph" required>
+  The model to synthesize.
+</ParamField>
+
+<ParamField path="reset" type="bool" default="False">
+  Clean the project before building.
+</ParamField>
+
+<ParamField path="csim" type="bool" default="True">
+  Run C simulation.
+</ParamField>
+
+<ParamField path="synth" type="bool" default="True">
+  Run synthesis.
+</ParamField>
+
+<ParamField path="cosim" type="bool" default="False">
+  Run co-simulation.
+</ParamField>
+
+<ParamField path="export" type="bool" default="False">
+  Export as IP.
+</ParamField>
+
+<ResponseField name="report" type="dict">
+  Synthesis report with resource usage and timing.
+</ResponseField>
+
+## Backend Management
+
+### get_backend
+
+Retrieve a registered backend.
+
+```python
+hls4ml.backends.get_backend(name)
+```
+
+<ParamField path="name" type="str" required>
+  Backend name (case-insensitive).
+</ParamField>
+
+<ResponseField name="backend" type="Backend">
+  The backend instance.
+</ResponseField>
+
+### Example
+
+```python
+import hls4ml
+
+# Get Vivado backend
+vivado = hls4ml.backends.get_backend('Vivado')
+print(f"Backend: {vivado.name}")
+print(f"Default flow: {vivado.get_default_flow()}")
+
+# Get available flows
+flows = vivado.get_available_flows()
+print(f"Available flows: {flows}")
+```
+
+### get_available_backends
+
+List all registered backends.
+
+```python
+hls4ml.backends.get_available_backends()
+```
+
+<ResponseField name="backends" type="list">
+  List of backend names.
+</ResponseField>
+
+### Example
+
+```python
+import hls4ml
+
+backends = hls4ml.backends.get_available_backends()
+print("Available backends:")
+for backend_name in backends:
+    backend = hls4ml.backends.get_backend(backend_name)
+    print(f"  - {backend_name}: {backend.get_default_flow()}")
+```
+
+### register_backend
+
+Register a new backend.
+
+```python
+hls4ml.backends.register_backend(name, backend_cls)
+```
+
+<ParamField path="name" type="str" required>
+  Name for the backend.
+</ParamField>
+
+<ParamField path="backend_cls" type="class" required>
+  Backend class (must inherit from Backend).
+</ParamField>
+
+## Backend Flows
+
+### get_default_flow
+
+Get the default optimization flow.
+
+```python
+backend.get_default_flow()
+```
+
+<ResponseField name="flow_name" type="str">
+  Name of the default flow.
+</ResponseField>
+
+### get_available_flows
+
+List available flows for this backend.
+
+```python
+backend.get_available_flows()
+```
+
+<ResponseField name="flows" type="list">
+  List of flow names.
+</ResponseField>
+
+### Example
+
+```python
+from hls4ml.backends import get_backend
+
+backend = get_backend('Vivado')
+
+# Get default flow
+default = backend.get_default_flow()
+print(f"Default flow: {default}")
+
+# Get all flows
+flows = backend.get_available_flows()
+print(f"Available flows: {flows}")
+
+# Apply specific flow
+model.apply_flow('vivado:ip')
+```
+
+## Custom Source Files
+
+### register_source
+
+Register custom C++ source files.
+
+```python
+backend.register_source(source_file, destination_dir='nnet_utils')
+```
+
+<ParamField path="source_file" type="str | Path" required>
+  Absolute path to the source file.
+</ParamField>
+
+<ParamField path="destination_dir" type="str" default="nnet_utils">
+  Subdirectory in the output project.
+</ParamField>
+
+### Example
+
+```python
+from pathlib import Path
+from hls4ml.backends import get_backend
+
+backend = get_backend('Vivado')
+
+# Register custom activation function
+custom_activation = Path('/path/to/custom_activation.h')
+backend.register_source(custom_activation, 'nnet_utils')
+
+# Custom source will be copied to project
+model = hls4ml.converters.convert_from_keras_model(
+    keras_model,
+    backend='Vivado'
+)
+
+model.write()
+# custom_activation.h is now in output_dir/firmware/nnet_utils/
+```
+
+### get_custom_source
+
+Retrieve registered custom source files.
+
+```python
+backend.get_custom_source()
+```
+
+<ResponseField name="sources" type="dict">
+  Dictionary mapping destination paths to source file paths.
+</ResponseField>
+
+## Optimizer Passes
+
+### register_pass
+
+Register a backend-specific optimizer pass.
+
+```python
+backend.register_pass(name, opt_cls, flow=None)
+```
+
+<ParamField path="name" type="str" required>
+  Pass name.
+</ParamField>
+
+<ParamField path="opt_cls" type="class" required>
+  Optimizer class.
+</ParamField>
+
+<ParamField path="flow" type="str | list" default="None">
+  Flow(s) to add this pass to.
+</ParamField>
+
+### Example
+
+```python
+from hls4ml.model.optimizer import OptimizerPass
+from hls4ml.backends import get_backend
+
+class CustomVivadoPass(OptimizerPass):
+    def match(self, node):
+        return node.class_name == 'Dense'
+    
+    def transform(self, model, node):
+        # Custom transformation
+        node.set_attr('custom_attr', True)
+        return False
+
+# Register with backend
+backend = get_backend('Vivado')
+backend.register_pass(
+    'custom_vivado_pass',
+    CustomVivadoPass,
+    flow='vivado:ip'
+)
+```
+
+## Precision Conversion
+
+### convert_precision_string
+
+Convert precision string to PrecisionType object.
+
+```python
+backend.convert_precision_string(precision)
+```
+
+<ParamField path="precision" type="str" required>
+  Precision string (e.g., `'ap_fixed<16,6>'`, `'float'`).
+</ParamField>
+
+<ResponseField name="precision_type" type="PrecisionType">
+  Internal precision representation.
+</ResponseField>
+
+### Supported Formats
+
+```python
+from hls4ml.backends import get_backend
+
+backend = get_backend('Vivado')
+
+# Fixed-point
+fp = backend.convert_precision_string('ap_fixed<16,6>')
+print(fp)  # FixedPrecisionType(16, 6, signed=True)
+
+# Unsigned fixed-point
+ufp = backend.convert_precision_string('ap_ufixed<8,4>')
+print(ufp)  # FixedPrecisionType(8, 4, signed=False)
+
+# Integer
+int_p = backend.convert_precision_string('ap_int<8>')
+print(int_p)  # IntegerPrecisionType(8, signed=True)
+
+# Float
+float_p = backend.convert_precision_string('float')
+print(float_p)  # StandardFloatPrecisionType(32, 8)
+
+# Custom float
+custom_float = backend.convert_precision_string('ap_float<16,5>')
+print(custom_float)  # StandardFloatPrecisionType(16, 5)
+```
+
+## Creating Custom Backends
+
+### Basic Structure
+
+```python
+from hls4ml.backends.backend import Backend
+from hls4ml.model.optimizer import OptimizerPass
+
+class MyCustomBackend(Backend):
+    def __init__(self):
+        super().__init__('MyBackend')
+        self.writer = None  # Initialize writer
+    
+    def create_initial_config(self, part='default_part', **kwargs):
+        config = {
+            'Part': part,
+            'ClockPeriod': kwargs.get('clock_period', 10),
+            'IOType': kwargs.get('io_type', 'io_parallel')
+        }
+        return config
+    
+    def create_layer_class(self, layer_class):
+        # Add backend-specific attributes
+        return type(
+            f'MyBackend{layer_class.__name__}',
+            (layer_class,),
+            {'_expected_attributes': []}
+        )
+    
+    def get_default_flow(self):
+        return 'mybackend:default'
+    
+    def compile(self, model):
+        # Compile implementation
+        pass
+    
+    def build(self, model, **kwargs):
+        # Synthesis implementation
+        pass
+
+# Register
+from hls4ml.backends import register_backend
+register_backend('MyBackend', MyCustomBackend)
+```
+
+### With Optimizer Passes
+
+```python
+class MyCustomBackend(Backend):
+    def __init__(self):
+        super().__init__('MyBackend')
+        
+        # Register backend-specific passes
+        self.register_pass('mybackend_init', MyInitPass)
+        self.register_pass('mybackend_optimize', MyOptimizePass)
+
+class MyInitPass(OptimizerPass):
+    def match(self, node):
+        return True
+    
+    def transform(self, model, node):
+        # Initialize layer for MyBackend
+        node.set_attr('backend_specific_attr', 'value')
+        return False
+
+class MyOptimizePass(OptimizerPass):
+    def match(self, node):
+        return node.class_name in ['Dense', 'Conv2D']
+    
+    def transform(self, model, node):
+        # Backend-specific optimization
+        return False
+```
+
+## See Also
+
+- [FPGA Backend](/api/backends/fpga)
+- [ModelGraph](/api/model/model)
+- [Optimizer](/api/model/optimizer)
+- [Configuration](/api/utils/config)

@@ -1,0 +1,693 @@
+---
+title: 'ONNX Frontend'
+description: 'Convert ONNX models to FPGA firmware with hls4ml'
+---
+
+The ONNX frontend enables conversion of ONNX (Open Neural Network Exchange) models to optimized FPGA firmware. This frontend provides an interoperable path from multiple frameworks including PyTorch, TensorFlow, scikit-learn, and more.
+
+## Conversion Function
+
+### convert_from_onnx_model()
+
+The primary function for converting ONNX models to hls4ml.
+
+```python python
+import onnx
+import hls4ml
+
+# Load ONNX model
+onnx_model = onnx.load('model.onnx')
+
+# Convert to hls4ml
+hls_model = hls4ml.converters.convert_from_onnx_model(
+    onnx_model,
+    output_dir='my-hls-test',
+    project_name='myproject',
+    backend='Vivado',
+    io_type='io_parallel',
+    hls_config={'Model': {'Precision': 'ap_fixed<16,6>', 'ReuseFactor': 1}}
+)
+```
+
+#### Parameters
+
+<ParamField path="model" type="onnx.ModelProto or str" required>
+  ONNX model to convert. Can be either:
+  - An `onnx.ModelProto` object (loaded model)
+  - A string path to an `.onnx` file
+</ParamField>
+
+<ParamField path="output_dir" type="str" default="my-hls-test">
+  Output directory for the generated HLS project.
+</ParamField>
+
+<ParamField path="project_name" type="str" default="myproject">
+  Name of the HLS project.
+</ParamField>
+
+<ParamField path="backend" type="str" default="Vivado">
+  Backend to use for HLS synthesis. Options: 'Vivado', 'Vitis', 'Quartus', 'Catapult'.
+</ParamField>
+
+<ParamField path="io_type" type="str" default="io_parallel">
+  I/O implementation type. Options: 'io_parallel', 'io_stream'.
+</ParamField>
+
+<ParamField path="hls_config" type="dict" default="None">
+  Configuration dictionary for HLS conversion. Should include:
+  - `Model`: Dictionary with `Precision` and `ReuseFactor`
+  - `LayerName`: Per-layer configuration (optional)
+  - `LayerType`: Per-layer-type configuration (optional)
+</ParamField>
+
+<ParamField path="part" type="str" default="None">
+  Target FPGA part number (e.g., 'xcvu9p-flgb2104-2-i').
+</ParamField>
+
+<ParamField path="clock_period" type="int" default="5">
+  Clock period in nanoseconds.
+</ParamField>
+
+<ParamField path="bit_exact" type="bool" default="None">
+  Enable model-wise precision propagation with fixed-point types only.
+</ParamField>
+
+## Complete Example
+
+<CodeGroup>
+```python From ONNX File
+import onnx
+import numpy as np
+import hls4ml
+
+# Load ONNX model
+onnx_model = onnx.load('model.onnx')
+
+# Optional: Check model
+onnx.checker.check_model(onnx_model)
+
+# Configure conversion
+config = {
+    'Model': {
+        'Precision': 'ap_fixed<16,6>',
+        'ReuseFactor': 4
+    }
+}
+
+# Convert to hls4ml
+hls_model = hls4ml.converters.convert_from_onnx_model(
+    onnx_model,
+    hls_config=config,
+    output_dir='onnx_model_hls',
+    backend='Vivado',
+    io_type='io_parallel'
+)
+
+# Compile and test
+hls_model.compile()
+
+# Test with sample data
+X_test = np.random.rand(100, 10).astype(np.float32)
+y_hls = hls_model.predict(X_test)
+```
+
+```python From PyTorch via ONNX
+import torch
+import torch.nn as nn
+import numpy as np
+import hls4ml
+
+# Define PyTorch model
+class SimpleModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(10, 32)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(32, 8)
+    
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
+
+# Export to ONNX
+model = SimpleModel()
+model.eval()
+
+dummy_input = torch.randn(1, 10)
+torch.onnx.export(
+    model,
+    dummy_input,
+    'model.onnx',
+    export_params=True,
+    opset_version=11,
+    input_names=['input'],
+    output_names=['output'],
+    dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}
+)
+
+# Load and convert
+import onnx
+onnx_model = onnx.load('model.onnx')
+
+config = {
+    'Model': {'Precision': 'ap_fixed<16,6>', 'ReuseFactor': 1}
+}
+
+hls_model = hls4ml.converters.convert_from_onnx_model(
+    onnx_model,
+    hls_config=config,
+    output_dir='pytorch_onnx_hls'
+)
+
+hls_model.compile()
+```
+
+```python From TensorFlow via ONNX
+import tensorflow as tf
+import tf2onnx
+import onnx
+import hls4ml
+
+# Create TensorFlow model
+model = tf.keras.Sequential([
+    tf.keras.layers.Dense(64, activation='relu', input_shape=(16,)),
+    tf.keras.layers.Dense(32, activation='relu'),
+    tf.keras.layers.Dense(8, activation='softmax')
+])
+
+model.compile(optimizer='adam', loss='categorical_crossentropy')
+
+# Convert to ONNX using tf2onnx
+spec = (tf.TensorSpec((None, 16), tf.float32, name='input'),)
+onnx_model, _ = tf2onnx.convert.from_keras(
+    model,
+    input_signature=spec,
+    opset=13
+)
+
+# Save ONNX model
+onnx.save(onnx_model, 'tf_model.onnx')
+
+# Convert to hls4ml
+config = {
+    'Model': {'Precision': 'ap_fixed<16,6>', 'ReuseFactor': 2}
+}
+
+hls_model = hls4ml.converters.convert_from_onnx_model(
+    'tf_model.onnx',
+    hls_config=config,
+    output_dir='tensorflow_onnx_hls'
+)
+```
+
+```python Using Config Dict
+import hls4ml
+
+# Convert using config dictionary
+config = {
+    'OnnxModel': 'path/to/model.onnx',
+    'OutputDir': 'my-hls-test',
+    'ProjectName': 'myproject',
+    'Part': 'xcvu9p-flgb2104-2-i',
+    'ClockPeriod': 5,
+    'IOType': 'io_stream',
+    'HLSConfig': {
+        'Model': {
+            'Precision': 'ap_fixed<16,6>',
+            'ReuseFactor': 8
+        }
+    }
+}
+
+hls_model = hls4ml.converters.convert_from_config(config)
+hls_model.compile()
+```
+</CodeGroup>
+
+## Supported Operations
+
+The ONNX frontend supports a wide range of ONNX operations:
+
+### Core Operations
+- **MatMul** - Matrix multiplication
+- **Gemm** - General matrix multiplication (converted to MatMul)
+- **Add** - Element-wise addition
+- **Sub** - Element-wise subtraction
+- **Mul** - Element-wise multiplication
+- **Div** - Element-wise division
+
+### Activation Operations
+- **Relu** - ReLU activation
+- **Sigmoid** - Sigmoid activation
+- **Tanh** - Hyperbolic tangent
+- **LeakyRelu** - Leaky ReLU
+- **Elu** - Exponential Linear Unit
+- **Selu** - Scaled ELU
+- **PRelu** - Parametric ReLU
+- **ThresholdedRelu** - Thresholded ReLU
+- **Softmax** - Softmax activation
+- **Softsign** - Softsign activation
+- **Softplus** - Softplus activation
+
+### Convolutional Operations
+- **Conv** - 1D and 2D convolution
+- **ConvTranspose** - Transposed convolution
+
+### Pooling Operations
+- **MaxPool** - Max pooling (1D/2D)
+- **AveragePool** - Average pooling (1D/2D)
+- **GlobalAveragePool** - Global average pooling
+
+### Normalization
+- **BatchNormalization** - Batch normalization (requires QONNX format)
+
+### Reshape Operations
+- **Flatten** - Flatten tensor
+- **Reshape** - Arbitrary reshaping
+- **Transpose** - Transpose dimensions
+- **Concat** - Concatenate tensors
+- **Squeeze** - Remove dimensions of size 1
+- **Unsqueeze** - Add dimensions of size 1
+
+### Special Operations
+- **Constant** - Constant tensors
+- **Identity** - Pass-through (skipped)
+- **Dropout** - Training-only (skipped)
+
+### Merge Operations
+- **Max** - Element-wise maximum
+- **Min** - Element-wise minimum
+- **Mean** - Element-wise mean
+
+## QONNX Support
+
+hls4ml has enhanced support for QONNX (Quantized ONNX) models, particularly from the Brevitas and FINN frameworks.
+
+### Converting QONNX Models
+
+```python python
+import onnx
+import qonnx.util.cleanup
+from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.transformation.channels_last import ConvertToChannelsLastAndClean
+import hls4ml
+
+# Load QONNX model
+qonnx_model = ModelWrapper('qonnx_model.onnx')
+
+# Clean up model
+qonnx.util.cleanup.cleanup('qonnx_model.onnx', out_file='cleaned_model.onnx')
+
+# Convert to channels-last format (required for hls4ml)
+from qonnx.util.to_channels_last import to_channels_last
+to_channels_last('cleaned_model.onnx', 
+                 make_input_channels_last=True, 
+                 out_file='channels_last.onnx')
+
+# Load processed model
+onnx_model = onnx.load('channels_last.onnx')
+
+# Convert to hls4ml
+config = {
+    'Model': {
+        'Precision': 'ap_fixed<16,6>',
+        'ReuseFactor': 1
+    }
+}
+
+hls_model = hls4ml.converters.convert_from_onnx_model(
+    onnx_model,
+    hls_config=config,
+    output_dir='qonnx_hls'
+)
+```
+
+### QONNX-Specific Layers
+
+QONNX models include quantized operations that hls4ml automatically handles:
+- Quantized convolutions
+- Quantized matrix multiplications
+- Multi-threshold activations
+- Quantized batch normalization
+
+## Framework-Specific Configuration
+
+### Channels-Last Format Requirement
+
+<Warning>
+ONNX models must be in `channels_last` format for convolution layers. Use QONNX transformations to convert.
+</Warning>
+
+```python python
+# Check data format
+import onnx
+model = onnx.load('model.onnx')
+
+# For QONNX models, use transformation
+from qonnx.util.to_channels_last import to_channels_last
+to_channels_last(
+    'model.onnx',
+    make_input_channels_last=True,
+    out_file='model_channels_last.onnx'
+)
+```
+
+### Input Shape Handling
+
+ONNX models include input shapes in the graph definition:
+
+```python python
+import onnx
+
+# Inspect input shapes
+model = onnx.load('model.onnx')
+for input in model.graph.input:
+    print(f"Input: {input.name}")
+    shape = [dim.dim_value for dim in input.type.tensor_type.shape.dim]
+    print(f"Shape: {shape}")
+
+# hls4ml automatically reads input shapes from ONNX graph
+# Batch dimension (first dimension) is removed automatically
+```
+
+### Model Optimization
+
+Optimize ONNX models before conversion:
+
+```python python
+import onnx
+from onnx import optimizer
+
+# Load model
+model = onnx.load('model.onnx')
+
+# Apply optimizations
+passes = [
+    'eliminate_identity',
+    'eliminate_nop_transpose',
+    'eliminate_nop_pad',
+    'eliminate_unused_initializer',
+    'fuse_consecutive_transposes',
+    'fuse_transpose_into_gemm',
+]
+
+optimized_model = optimizer.optimize(model, passes)
+onnx.save(optimized_model, 'model_optimized.onnx')
+
+# Convert optimized model
+hls_model = hls4ml.converters.convert_from_onnx_model(
+    optimized_model,
+    hls_config=config
+)
+```
+
+## Exporting to ONNX
+
+### From PyTorch
+
+```python python
+import torch
+import torch.nn as nn
+
+class MyModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc = nn.Linear(10, 5)
+    
+    def forward(self, x):
+        return self.fc(x)
+
+model = MyModel()
+model.eval()
+
+# Export to ONNX
+dummy_input = torch.randn(1, 10)
+torch.onnx.export(
+    model,
+    dummy_input,
+    'model.onnx',
+    export_params=True,
+    opset_version=11,  # Use 11-13 for best compatibility
+    do_constant_folding=True,
+    input_names=['input'],
+    output_names=['output'],
+    dynamic_axes={
+        'input': {0: 'batch_size'},
+        'output': {0: 'batch_size'}
+    }
+)
+```
+
+### From TensorFlow/Keras
+
+```python python
+import tensorflow as tf
+import tf2onnx
+
+# Load Keras model
+model = tf.keras.models.load_model('model.h5')
+
+# Convert to ONNX
+spec = (tf.TensorSpec(model.input.shape, tf.float32, name='input'),)
+onnx_model, _ = tf2onnx.convert.from_keras(
+    model,
+    input_signature=spec,
+    opset=13
+)
+
+onnx.save(onnx_model, 'keras_model.onnx')
+```
+
+### From scikit-learn
+
+```python python
+from sklearn.ensemble import RandomForestClassifier
+from skl2onnx import convert_sklearn
+from skl2onnx.common.data_types import FloatTensorType
+
+# Train scikit-learn model
+clf = RandomForestClassifier()
+clf.fit(X_train, y_train)
+
+# Convert to ONNX
+initial_type = [('float_input', FloatTensorType([None, X_train.shape[1]]))]
+onnx_model = convert_sklearn(clf, initial_types=initial_type)
+
+with open('sklearn_model.onnx', 'wb') as f:
+    f.write(onnx_model.SerializeToString())
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+<Accordion title="Unsupported ONNX operation">
+If you encounter unsupported operations:
+
+```python python
+# Check which operations are in your model
+import onnx
+model = onnx.load('model.onnx')
+
+ops = set()
+for node in model.graph.node:
+    ops.add(node.op_type)
+
+print("Operations in model:", ops)
+
+# Get supported operations
+from hls4ml.converters import get_supported_onnx_layers
+print("Supported operations:", get_supported_onnx_layers())
+
+# Find unsupported operations
+unsupported = ops - set(get_supported_onnx_layers())
+print("Unsupported operations:", unsupported)
+```
+
+Solutions:
+1. Use a different opset version when exporting
+2. Simplify the model to avoid unsupported operations
+3. Implement a custom layer handler
+</Accordion>
+
+<Accordion title="Channels format error for convolutions">
+Convolutions require channels-last format:
+
+```python python
+# Error: "Please convert the model to channels-last format"
+
+# Solution: Use QONNX transformation
+import qonnx.util.to_channels_last
+
+qonnx.util.to_channels_last.to_channels_last(
+    'model.onnx',
+    make_input_channels_last=True,
+    out_file='model_channels_last.onnx'
+)
+
+# Then convert
+onnx_model = onnx.load('model_channels_last.onnx')
+hls_model = hls4ml.converters.convert_from_onnx_model(onnx_model, hls_config=config)
+```
+</Accordion>
+
+<Accordion title="Model validation errors">
+Validate ONNX model before conversion:
+
+```python python
+import onnx
+
+# Load and check model
+model = onnx.load('model.onnx')
+
+try:
+    onnx.checker.check_model(model)
+    print("Model is valid")
+except onnx.checker.ValidationError as e:
+    print(f"Model is invalid: {e}")
+
+# Check for common issues
+print(f"IR version: {model.ir_version}")
+print(f"Opset version: {model.opset_import[0].version}")
+
+# Fix with shape inference
+from onnx import shape_inference
+inferred_model = shape_inference.infer_shapes(model)
+onnx.save(inferred_model, 'model_inferred.onnx')
+```
+</Accordion>
+
+<Accordion title="Input/output shape issues">
+Verify input and output shapes:
+
+```python python
+import onnx
+import numpy as np
+
+model = onnx.load('model.onnx')
+
+# Check input shapes
+for input in model.graph.input:
+    print(f"Input {input.name}:")
+    shape = [d.dim_value for d in input.type.tensor_type.shape.dim]
+    print(f"  Shape: {shape}")
+
+# Check output shapes
+for output in model.graph.output:
+    print(f"Output {output.name}:")
+    shape = [d.dim_value for d in output.type.tensor_type.shape.dim]
+    print(f"  Shape: {shape}")
+
+# Note: hls4ml removes batch dimension automatically
+# Input shape [1, 10] becomes [10] in hls4ml
+```
+</Accordion>
+
+<Accordion title="QONNX preprocessing issues">
+Proper QONNX model preprocessing:
+
+```python python
+import qonnx.util.cleanup
+from qonnx.transformation.gemm_to_matmul import GemmToMatMul
+from qonnx.core.modelwrapper import ModelWrapper
+
+# Full preprocessing pipeline
+model = ModelWrapper('qonnx_model.onnx')
+
+# 1. Convert Gemm to MatMul
+model = model.transform(GemmToMatMul())
+
+# 2. Cleanup
+qonnx.util.cleanup.cleanup(
+    'qonnx_model.onnx',
+    out_file='step1_clean.onnx'
+)
+
+# 3. Convert to channels-last
+from qonnx.util.to_channels_last import to_channels_last
+to_channels_last(
+    'step1_clean.onnx',
+    make_input_channels_last=True,
+    out_file='step2_channels_last.onnx'
+)
+
+# 4. Final cleanup
+qonnx.util.cleanup.cleanup(
+    'step2_channels_last.onnx',
+    out_file='final_model.onnx'
+)
+
+# Now convert to hls4ml
+import onnx
+onnx_model = onnx.load('final_model.onnx')
+hls_model = hls4ml.converters.convert_from_onnx_model(onnx_model, hls_config=config)
+```
+</Accordion>
+</AccordionGroup>
+
+## Advanced Usage
+
+### Custom ONNX Operation Handlers
+
+```python python
+from hls4ml.converters import register_onnx_layer_handler
+from hls4ml.converters.onnx_to_hls import onnx_handler, get_onnx_attribute
+
+@onnx_handler('CustomOp')
+def parse_custom_op(node, input_names, input_shapes, graph):
+    layer = {}
+    layer['class_name'] = 'CustomOperation'
+    layer['name'] = node.name
+    layer['inputs'] = input_names
+    layer['outputs'] = list(node.output)
+    
+    # Extract attributes
+    layer['custom_attr'] = get_onnx_attribute(node, 'custom_attr', default_value=1.0)
+    
+    return layer
+
+# Now CustomOp is supported
+```
+
+### Accessing ONNX Initializers
+
+```python python
+from hls4ml.converters.onnx_to_hls import get_constant_value
+
+# In custom handler
+def parse_layer_with_constants(node, input_names, input_shapes, graph):
+    # Get constant/initializer values
+    weight_name = node.input[1]  # Assuming weights are second input
+    weights = get_constant_value(graph, weight_name)
+    
+    layer = {}
+    layer['weight_data'] = weights
+    # ... rest of layer configuration
+    
+    return layer
+```
+
+## Source Code Reference
+
+The ONNX converter implementation can be found at:
+- `hls4ml/converters/onnx_to_hls.py:268` - Main conversion function
+- `hls4ml/converters/onnx/` - Operation-specific handlers
+- `hls4ml/converters/__init__.py:323` - API entry point
+
+## Next Steps
+
+<CardGroup cols={2}>
+<Card title="Keras Frontend" icon="layer-group" href="/frontends/keras">
+  Convert from Keras/TensorFlow
+</Card>
+<Card title="PyTorch Frontend" icon="fire" href="/frontends/pytorch">
+  Convert from PyTorch
+</Card>
+<Card title="Configuration" icon="gear" href="/concepts/model-conversion">
+  Configure HLS conversion
+</Card>
+<Card title="QONNX Guide" icon="cube" href="/frontends/onnx">
+  Learn about quantized ONNX models
+</Card>
+</CardGroup>

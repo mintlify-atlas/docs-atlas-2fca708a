@@ -1,0 +1,544 @@
+---
+title: 'Configuration'
+description: 'Configuration utilities and helpers'
+---
+
+## create_config
+
+Create an initial configuration for model conversion.
+
+```python
+hls4ml.utils.config.create_config(
+    output_dir='my-hls-test',
+    project_name='myproject',
+    backend='Vivado',
+    version='1.0.0',
+    **kwargs
+)
+```
+
+### Parameters
+
+<ParamField path="output_dir" type="str" default="my-hls-test">
+  Output directory for the generated HLS project.
+</ParamField>
+
+<ParamField path="project_name" type="str" default="myproject">
+  Name of the HLS project (used as top-level function name).
+</ParamField>
+
+<ParamField path="backend" type="str" default="Vivado">
+  Backend to use: `'Vivado'`, `'Vitis'`, `'Quartus'`, `'Catapult'`, etc.
+</ParamField>
+
+<ParamField path="version" type="str" default="1.0.0">
+  Project version string.
+</ParamField>
+
+### Backend-Specific Parameters
+
+<ParamField path="part" type="str" default="None">
+  FPGA part number (e.g., `'xcvu13p-flga2577-2-e'`).
+</ParamField>
+
+<ParamField path="board" type="str" default="None">
+  Target board name from `supported_board.json`.
+</ParamField>
+
+<ParamField path="clock_period" type="int" default="5">
+  Clock period in nanoseconds.
+</ParamField>
+
+<ParamField path="clock_uncertainty" type="str" default="12.5%">
+  Clock uncertainty as percentage.
+</ParamField>
+
+<ParamField path="io_type" type="str" default="io_parallel">
+  Interface type: `'io_parallel'` or `'io_stream'`.
+</ParamField>
+
+### Returns
+
+<ResponseField name="config" type="dict">
+  Configuration dictionary ready for conversion.
+</ResponseField>
+
+### Example
+
+```python
+import hls4ml
+
+# Basic configuration
+config = hls4ml.utils.config.create_config(
+    output_dir='my-hls-test',
+    project_name='myproject',
+    backend='Vivado'
+)
+
+# With FPGA details
+config = hls4ml.utils.config.create_config(
+    output_dir='production',
+    project_name='my_nn',
+    backend='Vivado',
+    part='xcvu9p-flgb2104-2-i',
+    clock_period=4,
+    io_type='io_stream'
+)
+
+# Using board preset
+config = hls4ml.utils.config.create_config(
+    output_dir='pynq_project',
+    project_name='pynq_nn',
+    backend='Vivado',
+    board='pynq-z2'
+)
+```
+
+## config_from_keras_model
+
+Generate HLS configuration from a Keras model structure.
+
+```python
+hls4ml.utils.config.config_from_keras_model(
+    model,
+    granularity='model',
+    backend=None,
+    default_precision='fixed<16,6>',
+    default_reuse_factor=1,
+    max_precision=None
+)
+```
+
+### Parameters
+
+<ParamField path="model" type="keras.Model | dict" required>
+  Keras model or model architecture dictionary.
+</ParamField>
+
+<ParamField path="granularity" type="str" default="model">
+  Configuration granularity:
+  - `'model'`: Global settings only
+  - `'type'`: Settings per layer type
+  - `'name'`: Settings per individual layer
+</ParamField>
+
+<ParamField path="backend" type="str" default="None">
+  Backend name for backend-specific attributes.
+</ParamField>
+
+<ParamField path="default_precision" type="str" default="fixed<16,6>">
+  Default precision for all layers.
+</ParamField>
+
+<ParamField path="default_reuse_factor" type="int" default="1">
+  Default reuse factor (1 = fully parallel).
+</ParamField>
+
+<ParamField path="max_precision" type="str" default="None">
+  Maximum allowed precision (for bit width limits).
+</ParamField>
+
+### Returns
+
+<ResponseField name="hls_config" type="dict">
+  HLS configuration dictionary.
+</ResponseField>
+
+### Example
+
+```python
+import tensorflow as tf
+import hls4ml
+
+# Create Keras model
+model = tf.keras.Sequential([
+    tf.keras.layers.Dense(64, activation='relu', input_shape=(10,)),
+    tf.keras.layers.Dense(32, activation='relu'),
+    tf.keras.layers.Dense(1)
+])
+
+# Generate config - model granularity
+config = hls4ml.utils.config.config_from_keras_model(
+    model,
+    granularity='model'
+)
+print(config)
+# {
+#   'Model': {
+#     'Precision': {'default': 'fixed<16,6>'},
+#     'ReuseFactor': 1,
+#     'Strategy': 'Latency'
+#   }
+# }
+
+# Type granularity - per layer type
+config = hls4ml.utils.config.config_from_keras_model(
+    model,
+    granularity='type',
+    backend='Vivado'
+)
+print(config['LayerType']['Dense'])
+# {
+#   'Precision': {'default': 'auto'},
+#   'ReuseFactor': 1
+# }
+
+# Name granularity - per layer
+config = hls4ml.utils.config.config_from_keras_model(
+    model,
+    granularity='name'
+)
+print(list(config['LayerName'].keys()))
+# ['dense', 'dense_1', 'dense_2']
+```
+
+### Customizing Generated Config
+
+```python
+# Generate base config
+config = hls4ml.utils.config.config_from_keras_model(
+    model,
+    granularity='name',
+    default_precision='ap_fixed<16,6>',
+    default_reuse_factor=4
+)
+
+# Customize specific layers
+config['LayerName']['dense_1']['Precision'] = 'ap_fixed<18,8>'
+config['LayerName']['dense_1']['ReuseFactor'] = 2
+
+# Convert with custom config
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='custom_config'
+)
+```
+
+## config_from_pytorch_model
+
+Generate HLS configuration from a PyTorch model.
+
+```python
+hls4ml.utils.config.config_from_pytorch_model(
+    model,
+    input_shape,
+    granularity='model',
+    backend=None,
+    default_precision='ap_fixed<16,6>',
+    default_reuse_factor=1,
+    channels_last_conversion='full',
+    transpose_outputs=False,
+    max_precision=None
+)
+```
+
+### Parameters
+
+<ParamField path="model" type="torch.nn.Module" required>
+  PyTorch model.
+</ParamField>
+
+<ParamField path="input_shape" type="tuple | list" required>
+  Input shape(s) excluding batch dimension.
+</ParamField>
+
+<ParamField path="channels_last_conversion" type="str" default="full">
+  Channel conversion mode:
+  - `'full'`: Convert inputs and internal layers
+  - `'internal'`: Only internal layers
+  - `'off'`: No conversion
+</ParamField>
+
+<ParamField path="transpose_outputs" type="bool" default="False">
+  Transpose outputs back to channels-first format.
+</ParamField>
+
+### Returns
+
+<ResponseField name="hls_config" type="dict">
+  HLS configuration dictionary with `'InputShape'` key.
+</ResponseField>
+
+### Example
+
+```python
+import torch
+import torch.nn as nn
+import hls4ml
+
+# PyTorch model
+class Net(nn.Module):
+    def __init__(self):
+        super(Net, self).__init__()
+        self.fc1 = nn.Linear(10, 64)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(64, 1)
+    
+    def forward(self, x):
+        x = self.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
+model = Net()
+
+# Generate config
+config = hls4ml.utils.config.config_from_pytorch_model(
+    model,
+    input_shape=(10,),
+    granularity='name',
+    default_precision='ap_fixed<16,6>',
+    default_reuse_factor=1
+)
+
+print(config['InputShape'])  # (10,)
+print(list(config['LayerName'].keys()))  # ['fc1', 'relu', 'fc2']
+
+# Customize and convert
+config['LayerName']['fc1']['ReuseFactor'] = 2
+
+hls_model = hls4ml.converters.convert_from_pytorch_model(
+    model,
+    hls_config=config,
+    output_dir='pytorch_custom'
+)
+```
+
+## config_from_onnx_model
+
+Generate HLS configuration from an ONNX model.
+
+```python
+hls4ml.utils.config.config_from_onnx_model(
+    model,
+    granularity='name',
+    backend=None,
+    default_precision='fixed<16,6>',
+    default_reuse_factor=1,
+    max_precision=None
+)
+```
+
+### Parameters
+
+<ParamField path="model" type="onnx.ModelProto" required>
+  ONNX model.
+</ParamField>
+
+<ParamField path="granularity" type="str" default="name">
+  Configuration granularity (recommended: `'name'` for ONNX).
+</ParamField>
+
+### Returns
+
+<ResponseField name="hls_config" type="dict">
+  HLS configuration dictionary.
+</ResponseField>
+
+### Example
+
+```python
+import onnx
+import hls4ml
+
+# Load ONNX model
+onnx_model = onnx.load('model.onnx')
+
+# Generate config
+config = hls4ml.utils.config.config_from_onnx_model(
+    onnx_model,
+    granularity='name',
+    backend='Vivado',
+    default_precision='ap_fixed<16,6>'
+)
+
+# Inspect generated config
+for layer_name in config['LayerName']:
+    print(f"{layer_name}: {config['LayerName'][layer_name]}")
+
+# Convert
+hls_model = hls4ml.converters.convert_from_onnx_model(
+    onnx_model,
+    hls_config=config,
+    output_dir='onnx_project'
+)
+```
+
+## Configuration Structure
+
+### Model-Level Config
+
+```python
+config = {
+    'Model': {
+        'Precision': 'ap_fixed<16,6>',     # Default precision
+        'ReuseFactor': 1,                   # Default reuse factor
+        'Strategy': 'Latency',              # 'Latency' or 'Resource'
+        'BramFactor': 1000000000,           # Weight size for BRAM
+        'TraceOutput': False,               # Enable layer tracing
+        'ConvImplementation': 'LineBuffer', # Conv implementation
+        'PipelineStyle': 'auto'             # HLS pipeline style
+    }
+}
+```
+
+### Layer Type Config
+
+```python
+config = {
+    'LayerType': {
+        'Dense': {
+            'Precision': {
+                'weight': 'ap_fixed<8,4>',
+                'bias': 'ap_fixed<8,4>',
+                'result': 'ap_fixed<16,6>'
+            },
+            'ReuseFactor': 4
+        },
+        'Activation': {
+            'Precision': 'ap_fixed<16,6>',
+            'table_size': 1024
+        }
+    }
+}
+```
+
+### Layer Name Config
+
+```python
+config = {
+    'LayerName': {
+        'dense_1': {
+            'Precision': {
+                'weight': 'ap_fixed<12,6>',
+                'bias': 'ap_fixed<12,6>',
+                'result': 'ap_fixed<16,6>'
+            },
+            'ReuseFactor': 2,
+            'Strategy': 'Latency'
+        },
+        'relu_1': {
+            'Precision': 'ap_fixed<16,6>',
+            'table_size': 512
+        }
+    }
+}
+```
+
+## Complete Example
+
+```python
+import tensorflow as tf
+import hls4ml
+import numpy as np
+
+# Create Keras model
+model = tf.keras.Sequential([
+    tf.keras.layers.Dense(128, activation='relu', input_shape=(784,)),
+    tf.keras.layers.Dense(64, activation='relu'),
+    tf.keras.layers.Dense(10, activation='softmax')
+])
+
+# Generate base config
+hls_config = hls4ml.utils.config.config_from_keras_model(
+    model,
+    granularity='name',
+    default_precision='ap_fixed<16,6>',
+    default_reuse_factor=1
+)
+
+# Customize precision and reuse factors
+hls_config['Model']['Strategy'] = 'Latency'
+
+hls_config['LayerName']['dense']['ReuseFactor'] = 2
+hls_config['LayerName']['dense']['Precision'] = {
+    'weight': 'ap_fixed<8,4>',
+    'bias': 'ap_fixed<8,4>',
+    'result': 'ap_fixed<16,6>'
+}
+
+hls_config['LayerName']['dense_1']['ReuseFactor'] = 4
+hls_config['LayerName']['dense_2']['ReuseFactor'] = 8
+
+hls_config['LayerName']['activation']['table_size'] = 512
+
+# Create backend config
+backend_config = hls4ml.utils.config.create_config(
+    output_dir='mnist_hls',
+    project_name='mnist_nn',
+    backend='Vivado',
+    board='pynq-z2',
+    io_type='io_stream'
+)
+
+# Combine and convert
+full_config = {**backend_config}
+full_config['HLSConfig'] = hls_config
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    **full_config
+)
+
+# Test
+hls_model.compile()
+X_test = np.random.rand(10, 784).astype(np.float32)
+predictions = hls_model.predict(X_test)
+print(f"Predictions: {predictions.shape}")
+
+# Synthesize
+report = hls_model.build(csim=True, synth=True)
+print(f"Resources: LUT={report['LUT']}, FF={report['FF']}, DSP={report['DSP']}")
+```
+
+## Configuration Tips
+
+### Optimizing for Latency
+
+```python
+config = {
+    'Model': {
+        'Precision': 'ap_fixed<16,6>',
+        'ReuseFactor': 1,        # Fully parallel
+        'Strategy': 'Latency',
+        'ConvImplementation': 'Encoded'  # Fast convolution
+    }
+}
+```
+
+### Optimizing for Resources
+
+```python
+config = {
+    'Model': {
+        'Precision': 'ap_fixed<8,4>',  # Lower precision
+        'ReuseFactor': 64,              # More sequential
+        'Strategy': 'Resource'
+    }
+}
+```
+
+### Mixed Precision
+
+```python
+config = {
+    'Model': {
+        'Precision': 'ap_fixed<16,6>'
+    },
+    'LayerName': {
+        'first_layer': {
+            'Precision': 'ap_fixed<12,6>'  # Lower for first layer
+        },
+        'output': {
+            'Precision': 'ap_fixed<18,8>'  # Higher for output
+        }
+    }
+}
+```
+
+## See Also
+
+- [Keras Converter](/api/converters/keras)
+- [PyTorch Converter](/api/converters/pytorch)
+- [ONNX Converter](/api/converters/onnx)
+- [ModelGraph](/api/model/model)

@@ -1,0 +1,505 @@
+---
+title: Quantization with QKeras
+description: Use QKeras for quantization-aware training and binary/ternary networks
+---
+
+QKeras provides quantization-aware training (QAT) layers that seamlessly integrate with hls4ml. Quantizers define the bit-widths and numerical representations used in your model.
+
+## Overview
+
+QKeras extends Keras with quantized layers and quantizers that:
+
+- Simulate fixed-point arithmetic during training
+- Support binary and ternary quantization
+- Enable power-of-2 (po2) quantization
+- Provide fine-grained control over precision
+
+<Note>
+  Install QKeras: `pip install qkeras`
+</Note>
+
+## QKeras Quantizers
+
+### quantized_bits
+
+The most common quantizer for fixed-point values:
+
+```python
+from qkeras import QDense, quantized_bits
+
+# 8-bit fixed-point with 4 integer bits (including sign)
+layer = QDense(
+    units=64,
+    kernel_quantizer=quantized_bits(bits=8, integer=3),
+    bias_quantizer=quantized_bits(bits=8, integer=3)
+)
+```
+
+**Parameters:**
+- `bits`: Total bit-width
+- `integer`: Number of integer bits (not including sign)
+- `symmetric`: Use symmetric quantization (default: False)
+- `alpha`: Scaling factor (default: None)
+- `keep_negative`: Maintain negative values (default: True)
+
+### Binary Quantization
+
+For extreme compression with binary weights:
+
+```python
+from qkeras import binary
+
+# Binary quantization: {-1, +1}
+layer = QDense(
+    units=32,
+    kernel_quantizer=binary(alpha=1.0)
+)
+```
+
+Binary quantizers in QKeras produce values in {-1, +1}. In hls4ml, this maps to:
+- 1-bit `XnorPrecisionType` for kernel weights
+- 2-bit `IntegerPrecisionType` for other uses
+
+### Ternary Quantization
+
+Three-level quantization for better accuracy than binary:
+
+```python
+from qkeras import ternary
+
+# Ternary quantization: {-1, 0, +1}
+layer = QDense(
+    units=32,
+    kernel_quantizer=ternary(alpha=1.0)
+)
+```
+
+### Power-of-2 Quantization
+
+Constrains weights to powers of two (no multipliers needed):
+
+```python
+from qkeras import quantized_po2
+
+# Weights are restricted to powers of 2
+layer = QDense(
+    units=64,
+    kernel_quantizer=quantized_po2(bits=8, max_value=8)
+)
+```
+
+Po2 quantization uses only bit shifts, eliminating multipliers entirely.
+
+## QKeras Layers
+
+### QDense
+
+Quantized fully-connected layer:
+
+```python
+from qkeras import QDense, quantized_bits
+
+model = Sequential([
+    QDense(
+        units=128,
+        kernel_quantizer=quantized_bits(8, 3),
+        bias_quantizer=quantized_bits(8, 3),
+        activation='relu'
+    )
+])
+```
+
+### QConv2D
+
+Quantized 2D convolution:
+
+```python
+from qkeras import QConv2D
+
+model = Sequential([
+    QConv2D(
+        filters=32,
+        kernel_size=(3, 3),
+        kernel_quantizer=quantized_bits(8, 3),
+        bias_quantizer=quantized_bits(8, 3),
+        activation='relu'
+    )
+])
+```
+
+### QActivation
+
+Quantized activation function:
+
+```python
+from qkeras import QActivation, quantized_relu
+
+model = Sequential([
+    Dense(64),
+    QActivation(quantized_relu(bits=8, integer=3))
+])
+```
+
+<Warning>
+  Always place a `QActivation` immediately after the input layer to ensure input precision is properly inferred by hls4ml.
+</Warning>
+
+### QBatchNormalization
+
+Quantized batch normalization:
+
+```python
+from qkeras import QBatchNormalization
+
+model = Sequential([
+    QConv2D(32, (3, 3), kernel_quantizer=quantized_bits(8, 3)),
+    QBatchNormalization(
+        gamma_quantizer=quantized_bits(8, 3),
+        beta_quantizer=quantized_bits(8, 3)
+    ),
+    QActivation('quantized_relu(8, 3)')
+])
+```
+
+## Quantized Activations
+
+### quantized_relu
+
+```python
+from qkeras import quantized_relu
+
+QActivation(quantized_relu(bits=6, integer=2))
+```
+
+### quantized_tanh
+
+```python
+from qkeras import quantized_tanh
+
+QActivation(quantized_tanh(bits=8, integer=3))
+```
+
+### quantized_sigmoid
+
+```python
+from qkeras import quantized_sigmoid
+
+QActivation(quantized_sigmoid(bits=8, integer=3))
+```
+
+## Complete QKeras Example
+
+Building a quantized model from scratch:
+
+```python
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from qkeras import QDense, QConv2D, QActivation, quantized_bits, quantized_relu
+
+# Build quantized model
+model = Sequential([
+    # Input quantization
+    QActivation(quantized_bits(8, 3), input_shape=(32, 32, 3)),
+    
+    # First conv block
+    QConv2D(
+        filters=32,
+        kernel_size=(3, 3),
+        kernel_quantizer=quantized_bits(8, 3),
+        bias_quantizer=quantized_bits(8, 3),
+        padding='same'
+    ),
+    QActivation(quantized_relu(8, 3)),
+    
+    # Second conv block
+    QConv2D(
+        filters=64,
+        kernel_size=(3, 3),
+        kernel_quantizer=quantized_bits(8, 3),
+        bias_quantizer=quantized_bits(8, 3),
+        padding='same',
+        strides=(2, 2)
+    ),
+    QActivation(quantized_relu(8, 3)),
+    
+    # Dense layers
+    tf.keras.layers.Flatten(),
+    QDense(
+        units=128,
+        kernel_quantizer=quantized_bits(8, 3),
+        bias_quantizer=quantized_bits(8, 3)
+    ),
+    QActivation(quantized_relu(8, 3)),
+    
+    QDense(
+        units=10,
+        kernel_quantizer=quantized_bits(8, 3),
+        bias_quantizer=quantized_bits(8, 3),
+        activation='softmax'
+    )
+])
+
+# Compile and train as usual
+model.compile(
+    optimizer='adam',
+    loss='categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.fit(X_train, y_train, epochs=10, validation_split=0.1)
+```
+
+## Converting QKeras Models to hls4ml
+
+QKeras models convert seamlessly to hls4ml:
+
+```python
+import hls4ml
+
+# Create configuration
+config = hls4ml.utils.config_from_keras_model(
+    model,
+    granularity='name'
+)
+
+# Convert to hls4ml
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='qkeras_hls4ml',
+    backend='Vivado'
+)
+
+# Quantizers are automatically extracted
+hls_model.compile()
+```
+
+<Info>
+  hls4ml automatically detects QKeras quantizers and applies the correct precision types. No manual precision configuration needed!
+</Info>
+
+## Binary Neural Networks
+
+Extreme quantization with binary weights and activations:
+
+```python
+from qkeras import QDense, QActivation, binary, quantized_bits
+
+# Binary neural network
+model = Sequential([
+    # Input still uses more bits for better accuracy
+    QActivation(quantized_bits(8, 3), input_shape=(784,)),
+    
+    # Binary dense layer
+    QDense(
+        units=256,
+        kernel_quantizer=binary(alpha=1.0),
+        bias_quantizer=quantized_bits(8, 3)  # Bias usually not binary
+    ),
+    QActivation(binary(alpha=1.0)),
+    
+    QDense(
+        units=256,
+        kernel_quantizer=binary(alpha=1.0),
+        bias_quantizer=quantized_bits(8, 3)
+    ),
+    QActivation(binary(alpha=1.0)),
+    
+    # Output layer with more precision
+    QDense(
+        units=10,
+        kernel_quantizer=quantized_bits(8, 3),
+        bias_quantizer=quantized_bits(8, 3),
+        activation='softmax'
+    )
+])
+```
+
+### Benefits of Binary Networks
+
+<CardGroup cols={3}>
+  <Card title="Memory" icon="memory">
+    32x reduction in model size compared to FP32
+  </Card>
+  <Card title="Speed" icon="gauge-high">
+    Replace multiplications with XNOR operations
+  </Card>
+  <Card title="Power" icon="bolt">
+    Dramatically lower power consumption
+  </Card>
+</CardGroup>
+
+## Ternary Neural Networks
+
+Slightly more precision than binary with zero weights:
+
+```python
+from qkeras import ternary
+
+model = Sequential([
+    QActivation(quantized_bits(8, 3), input_shape=(784,)),
+    
+    QDense(
+        units=256,
+        kernel_quantizer=ternary(alpha=1.0),
+        bias_quantizer=quantized_bits(8, 3)
+    ),
+    QActivation(ternary(alpha=1.0)),
+    
+    QDense(
+        units=10,
+        kernel_quantizer=quantized_bits(8, 3),
+        bias_quantizer=quantized_bits(8, 3),
+        activation='softmax'
+    )
+])
+```
+
+## Stochastic Quantization
+
+Add noise during training for better convergence:
+
+```python
+from qkeras import stochastic_binary, stochastic_ternary
+
+# Stochastic binary
+layer = QDense(
+    units=128,
+    kernel_quantizer=stochastic_binary(alpha=1.0)
+)
+
+# Stochastic ternary
+layer = QDense(
+    units=128,
+    kernel_quantizer=stochastic_ternary(alpha=1.0, threshold=0.5)
+)
+```
+
+<Note>
+  Stochastic quantizers add randomness during training to escape local minima. At inference time, they behave like their deterministic counterparts.
+</Note>
+
+## Advanced Techniques
+
+### Heterogeneous Precision
+
+Use different bit-widths for different layers:
+
+```python
+model = Sequential([
+    # Early layers: higher precision
+    QActivation(quantized_bits(8, 3), input_shape=(784,)),
+    QDense(128, kernel_quantizer=quantized_bits(8, 3)),
+    QActivation(quantized_relu(8, 3)),
+    
+    # Middle layers: medium precision
+    QDense(64, kernel_quantizer=quantized_bits(6, 2)),
+    QActivation(quantized_relu(6, 2)),
+    
+    # Late layers: lower precision acceptable
+    QDense(32, kernel_quantizer=quantized_bits(4, 1)),
+    QActivation(quantized_relu(4, 1)),
+    
+    # Output: back to higher precision
+    QDense(10, kernel_quantizer=quantized_bits(8, 3))
+])
+```
+
+### Mixed Binary-Ternary-Float
+
+```python
+model = Sequential([
+    QActivation(quantized_bits(8, 3), input_shape=(784,)),
+    
+    # First layer: ternary (more precision for input processing)
+    QDense(256, kernel_quantizer=ternary(alpha=1.0)),
+    QActivation(quantized_relu(4, 2)),
+    
+    # Middle layers: binary (aggressive compression)
+    QDense(128, kernel_quantizer=binary(alpha=1.0)),
+    QActivation(binary(alpha=1.0)),
+    
+    QDense(64, kernel_quantizer=binary(alpha=1.0)),
+    QActivation(binary(alpha=1.0)),
+    
+    # Output: standard quantized (need precision for classification)
+    QDense(10, kernel_quantizer=quantized_bits(8, 3))
+])
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Start with quantized_bits">
+    Begin with standard `quantized_bits` before trying binary/ternary. This establishes a baseline and helps you understand precision requirements.
+  </Accordion>
+  
+  <Accordion title="Quantize inputs explicitly">
+    Always add `QActivation` as the first layer to quantize inputs. This ensures hls4ml correctly infers input precision.
+  </Accordion>
+  
+  <Accordion title="Use higher precision for first/last layers">
+    Input and output layers often benefit from higher precision. Reserve aggressive quantization for middle layers.
+  </Accordion>
+  
+  <Accordion title="Quantize from pretrained models">
+    Fine-tune a pretrained FP32 model with QKeras quantizers instead of training from scratch. This typically gives better accuracy.
+  </Accordion>
+  
+  <Accordion title="Monitor integer bits carefully">
+    Overflow in fixed-point arithmetic causes severe accuracy loss. Use profiling to ensure integer bits are sufficient.
+  </Accordion>
+  
+  <Accordion title="Test with C simulation">
+    Always validate quantized models with hls4ml C simulation before synthesis to catch precision issues early.
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Poor accuracy with binary/ternary">
+    - Ensure input layer uses higher precision (8-bit or more)
+    - Try ternary instead of binary for more flexibility
+    - Increase network width to compensate for reduced precision
+    - Use batch normalization between layers
+  </Accordion>
+  
+  <Accordion title="NaN or Inf values during training">
+    - Reduce learning rate (quantized training is more sensitive)
+    - Add gradient clipping
+    - Increase integer bits in quantizers
+    - Check for overflow in accumulator types
+  </Accordion>
+  
+  <Accordion title="hls4ml conversion fails">
+    - Ensure all layers use QKeras versions (QDense, not Dense)
+    - Add explicit input quantization with QActivation
+    - Check that quantizer configurations are supported
+    - Verify QKeras is installed: `pip install qkeras`
+  </Accordion>
+</AccordionGroup>
+
+## API Reference
+
+### Quantizer Functions
+
+```python
+qkeras.quantized_bits(bits, integer=0, symmetric=False, alpha=None, keep_negative=True)
+qkeras.binary(alpha=1.0)
+qkeras.ternary(alpha=1.0, threshold=0.5)
+qkeras.quantized_po2(bits, max_value=None)
+qkeras.quantized_relu(bits, integer=0, use_sigmoid=False)
+qkeras.quantized_tanh(bits, integer=0, symmetric=False)
+```
+
+### QKeras Layers
+
+```python
+qkeras.QDense(units, kernel_quantizer=None, bias_quantizer=None, ...)
+qkeras.QConv1D(filters, kernel_size, kernel_quantizer=None, bias_quantizer=None, ...)
+qkeras.QConv2D(filters, kernel_size, kernel_quantizer=None, bias_quantizer=None, ...)
+qkeras.QDepthwiseConv2D(kernel_size, depthwise_quantizer=None, bias_quantizer=None, ...)
+qkeras.QActivation(activation, ...)
+qkeras.QBatchNormalization(gamma_quantizer=None, beta_quantizer=None, ...)
+```

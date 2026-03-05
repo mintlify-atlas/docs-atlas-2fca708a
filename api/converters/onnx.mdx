@@ -1,0 +1,514 @@
+---
+title: 'ONNX Converter'
+description: 'Convert ONNX models to HLS'
+---
+
+## convert_from_onnx_model
+
+Convert an ONNX model to an hls4ml ModelGraph.
+
+```python
+hls4ml.converters.convert_from_onnx_model(
+    model,
+    output_dir='my-hls-test',
+    project_name='myproject',
+    input_data_tb=None,
+    output_data_tb=None,
+    backend='Vivado',
+    hls_config=None,
+    bit_exact=None,
+    **kwargs
+)
+```
+
+### Parameters
+
+<ParamField path="model" type="str | onnx.ModelProto" required>
+  ONNX model to convert. Can be either a file path or an ONNX ModelProto object.
+</ParamField>
+
+<ParamField path="output_dir" type="str" default="my-hls-test">
+  Output directory for the generated HLS project.
+</ParamField>
+
+<ParamField path="project_name" type="str" default="myproject">
+  Name of the HLS project. Used as the top-level function name.
+</ParamField>
+
+<ParamField path="input_data_tb" type="str" default="None">
+  Path to input test data in `.npy` or `.dat` format for C simulation and co-simulation.
+</ParamField>
+
+<ParamField path="output_data_tb" type="str" default="None">
+  Path to expected output data in `.npy` or `.dat` format for verification.
+</ParamField>
+
+<ParamField path="backend" type="str" default="Vivado">
+  Backend to use. Options: `'Vivado'`, `'Vitis'`, `'Quartus'`, `'Catapult'`.
+</ParamField>
+
+<ParamField path="board" type="str" default="None">
+  Target board from `supported_board.json`. Overrides `part` parameter.
+</ParamField>
+
+<ParamField path="part" type="str" default="None">
+  FPGA part number. Backend-specific defaults used if not provided.
+</ParamField>
+
+<ParamField path="clock_period" type="int" default="5">
+  Clock period in nanoseconds.
+</ParamField>
+
+<ParamField path="io_type" type="str" default="io_parallel">
+  Interface type: `'io_parallel'` or `'io_stream'`.
+</ParamField>
+
+<ParamField path="hls_config" type="dict" default="None">
+  HLS configuration dictionary. See [Configuration Guide](/api/utils/config) for details.
+</ParamField>
+
+<ParamField path="bit_exact" type="bool" default="None">
+  Enable model-wise fixed-point precision propagation. If `None`, automatically enabled for HGQ models.
+</ParamField>
+
+### Returns
+
+<ResponseField name="hls_model" type="ModelGraph">
+  The converted hls4ml model ready for compilation and synthesis.
+</ResponseField>
+
+### Example
+
+```python
+import onnx
+import hls4ml
+import numpy as np
+
+# Load ONNX model
+onnx_model = onnx.load('model.onnx')
+
+# Configure HLS settings
+hls_config = {
+    'Model': {
+        'Precision': 'ap_fixed<16,6>',
+        'ReuseFactor': 4
+    }
+}
+
+# Convert to HLS
+hls_model = hls4ml.converters.convert_from_onnx_model(
+    onnx_model,
+    output_dir='my_onnx_prj',
+    project_name='my_onnx_model',
+    backend='Vivado',
+    hls_config=hls_config
+)
+
+# Compile the model
+hls_model.compile()
+
+# Test predictions
+X_test = np.random.rand(100, 10).astype(np.float32)
+predictions = hls_model.predict(X_test)
+```
+
+## onnx_to_hls
+
+Lower-level function that performs the actual ONNX to HLS conversion.
+
+```python
+hls4ml.converters.onnx_to_hls(config)
+```
+
+### Parameters
+
+<ParamField path="config" type="dict" required>
+  Configuration dictionary containing model and conversion parameters with `'OnnxModel'` key.
+</ParamField>
+
+### Returns
+
+<ResponseField name="model_graph" type="ModelGraph">
+  The hls4ml ModelGraph representation.
+</ResponseField>
+
+### Example
+
+```python
+import onnx
+import hls4ml
+
+onnx_model = onnx.load('model.onnx')
+
+config = {
+    'OnnxModel': onnx_model,
+    'OutputDir': 'my-hls-test',
+    'ProjectName': 'myproject',
+    'Backend': 'Vivado',
+    'HLSConfig': {
+        'Model': {
+            'Precision': 'ap_fixed<16,6>',
+            'ReuseFactor': 1
+        }
+    }
+}
+
+hls_model = hls4ml.converters.onnx_to_hls(config)
+```
+
+## parse_onnx_model
+
+Parse an ONNX model and extract its layers.
+
+```python
+hls4ml.converters.parse_onnx_model(onnx_model)
+```
+
+### Parameters
+
+<ParamField path="onnx_model" type="onnx.ModelProto" required>
+  ONNX model to parse.
+</ParamField>
+
+### Returns
+
+<ResponseField name="result" type="tuple">
+  Returns `(layer_list, input_layers, output_layers)` where:
+  - `layer_list`: List of layer dictionaries
+  - `input_layers`: List of input layer names
+  - `output_layers`: List of output layer names
+</ResponseField>
+
+### Example
+
+```python
+import onnx
+import hls4ml
+
+onnx_model = onnx.load('model.onnx')
+layer_list, inputs, outputs = hls4ml.converters.parse_onnx_model(onnx_model)
+
+print(f"Input layers: {inputs}")
+print(f"Output layers: {outputs}")
+
+for layer in layer_list:
+    print(f"{layer['name']}: {layer['class_name']}")
+```
+
+## Helper Functions
+
+### get_onnx_attribute
+
+Extract an attribute from an ONNX operation node.
+
+```python
+hls4ml.converters.onnx_to_hls.get_onnx_attribute(
+    operation, 
+    name, 
+    default=None
+)
+```
+
+<ParamField path="operation" type="onnx.NodeProto" required>
+  ONNX node operation.
+</ParamField>
+
+<ParamField path="name" type="str" required>
+  Name of the attribute to retrieve.
+</ParamField>
+
+<ParamField path="default" type="Any" default="None">
+  Default value if attribute not found.
+</ParamField>
+
+### get_input_shape
+
+Get the input shapes of a node.
+
+```python
+hls4ml.converters.onnx_to_hls.get_input_shape(graph, node)
+```
+
+<ParamField path="graph" type="onnx.GraphProto" required>
+  ONNX graph containing the node.
+</ParamField>
+
+<ParamField path="node" type="onnx.NodeProto" required>
+  ONNX node to get input shapes for.
+</ParamField>
+
+<ResponseField name="shapes" type="list">
+  List of input shapes (as lists) for all inputs to the node.
+</ResponseField>
+
+### get_constant_value
+
+Retrieve the value of a constant tensor.
+
+```python
+hls4ml.converters.onnx_to_hls.get_constant_value(graph, constant_name)
+```
+
+<ParamField path="graph" type="onnx.GraphProto" required>
+  ONNX graph containing the constant.
+</ParamField>
+
+<ParamField path="constant_name" type="str" required>
+  Name of the constant tensor.
+</ParamField>
+
+<ResponseField name="value" type="numpy.ndarray">
+  The constant value as a NumPy array.
+</ResponseField>
+
+## Exporting ONNX from Frameworks
+
+### From PyTorch
+
+```python
+import torch
+import torch.onnx
+
+# PyTorch model
+model = MyPyTorchModel()
+model.eval()
+
+# Dummy input
+dummy_input = torch.randn(1, 3, 224, 224)
+
+# Export to ONNX
+torch.onnx.export(
+    model,
+    dummy_input,
+    'model.onnx',
+    export_params=True,
+    opset_version=11,
+    input_names=['input'],
+    output_names=['output'],
+    dynamic_axes={
+        'input': {0: 'batch_size'},
+        'output': {0: 'batch_size'}
+    }
+)
+
+# Convert to hls4ml
+import hls4ml
+hls_model = hls4ml.converters.convert_from_onnx_model(
+    'model.onnx',
+    output_dir='onnx_prj'
+)
+```
+
+### From TensorFlow
+
+```python
+import tensorflow as tf
+import tf2onnx
+
+# TensorFlow model
+model = tf.keras.models.load_model('model.h5')
+
+# Convert to ONNX
+spec = (tf.TensorSpec((None, 224, 224, 3), tf.float32, name='input'),)
+onnx_model, _ = tf2onnx.convert.from_keras(
+    model,
+    input_signature=spec,
+    opset=13
+)
+
+# Save ONNX model
+import onnx
+onnx.save(onnx_model, 'model.onnx')
+
+# Convert to hls4ml
+import hls4ml
+hls_model = hls4ml.converters.convert_from_onnx_model(
+    'model.onnx',
+    output_dir='onnx_prj'
+)
+```
+
+## Supported Operations
+
+ONNX converter supports:
+
+### Basic Operations
+- `Gemm` - General matrix multiplication (fully connected)
+- `MatMul` - Matrix multiplication
+- `Add`, `Sub`, `Mul`, `Div` - Element-wise arithmetic
+- `Neg`, `Abs`, `Sqrt` - Unary operations
+
+### Activation Functions
+- `Relu`, `LeakyRelu`, `Elu`, `PRelu`
+- `Sigmoid`, `Tanh`
+- `Softmax`, `Softplus`, `Softsign`
+- `HardSigmoid`, `HardSwish`
+
+### Convolutional Operations
+- `Conv` - Convolution (1D, 2D)
+- `MaxPool`, `AveragePool` - Pooling
+- `GlobalAveragePool`, `GlobalMaxPool`
+
+### Normalization
+- `BatchNormalization`
+- `LayerNormalization`
+- `InstanceNormalization`
+
+### Structural
+- `Reshape`, `Flatten`, `Squeeze`, `Unsqueeze`
+- `Transpose`, `Concat`, `Split`
+- `Slice`, `Gather`
+- `Pad`
+
+### Reduction Operations
+- `ReduceSum`, `ReduceMean`, `ReduceMax`, `ReduceMin`
+
+### Other
+- `Clip` - Clipping values
+- `Cast` - Type casting
+- `Constant` - Constant values
+- `Identity` (skipped)
+- `Dropout` (skipped)
+
+## Advanced Configuration
+
+```python
+import onnx
+import hls4ml
+
+# Load and inspect ONNX model
+onnx_model = onnx.load('complex_model.onnx')
+
+# Create detailed configuration
+hls_config = {
+    'Model': {
+        'Precision': 'ap_fixed<16,6>',
+        'ReuseFactor': 1,
+        'Strategy': 'Latency'
+    },
+    'LayerName': {}
+}
+
+# Get layer information
+layer_list, _, _ = hls4ml.converters.parse_onnx_model(onnx_model)
+
+# Configure each layer
+for layer in layer_list:
+    layer_name = layer['name']
+    layer_type = layer['class_name']
+    
+    if layer_type in ['Dense', 'Conv1D', 'Conv2D']:
+        hls_config['LayerName'][layer_name] = {
+            'Precision': {'weight': 'ap_fixed<8,4>', 'bias': 'ap_fixed<8,4>'},
+            'ReuseFactor': 4
+        }
+    elif layer_type == 'Activation':
+        hls_config['LayerName'][layer_name] = {
+            'Precision': 'ap_fixed<16,6>',
+            'table_size': 1024
+        }
+
+# Convert with custom config
+hls_model = hls4ml.converters.convert_from_onnx_model(
+    onnx_model,
+    output_dir='custom_onnx_prj',
+    backend='Vivado',
+    hls_config=hls_config
+)
+```
+
+## Padding Computation
+
+ONNX auto-padding is automatically handled:
+
+```python
+def compute_pads_2d(operation, layer):
+    """Compute padding for 2D operations."""
+    auto_pad = get_onnx_attribute(operation, 'auto_pad', 'NOTSET')
+    
+    if auto_pad != 'NOTSET':
+        # Compute padding based on input/output sizes
+        if auto_pad == 'SAME_UPPER':
+            # Padding applied more to bottom/right
+            pass
+        elif auto_pad == 'SAME_LOWER':
+            # Padding applied more to top/left
+            pass
+        else:  # 'VALID'
+            pads = [0, 0, 0, 0]
+    else:
+        # Use explicit pads attribute
+        pads = get_onnx_attribute(operation, 'pads', [0, 0, 0, 0])
+    
+    return pads
+```
+
+## Debugging
+
+### Inspect ONNX Model
+
+```python
+import onnx
+from onnx import helper
+
+model = onnx.load('model.onnx')
+
+print("Model inputs:")
+for inp in model.graph.input:
+    print(f"  {inp.name}: {[d.dim_value for d in inp.type.tensor_type.shape.dim]}")
+
+print("\nModel outputs:")
+for out in model.graph.output:
+    print(f"  {out.name}: {[d.dim_value for d in out.type.tensor_type.shape.dim]}")
+
+print("\nOperations:")
+for node in model.graph.node:
+    print(f"  {node.name} ({node.op_type}): {node.input} -> {node.output}")
+```
+
+### Verify Conversion
+
+```python
+import onnx
+import onnxruntime as ort
+import numpy as np
+import hls4ml
+
+# Load ONNX
+onnx_model = onnx.load('model.onnx')
+
+# Run with ONNX Runtime
+sess = ort.InferenceSession('model.onnx')
+input_name = sess.get_inputs()[0].name
+test_input = np.random.rand(1, 10).astype(np.float32)
+onnx_output = sess.run(None, {input_name: test_input})[0]
+
+# Convert and run with hls4ml
+hls_model = hls4ml.converters.convert_from_onnx_model(
+    onnx_model,
+    output_dir='verify_prj'
+)
+hls_model.compile()
+hls_output = hls_model.predict(test_input[0])
+
+# Compare
+diff = np.abs(onnx_output[0] - hls_output)
+print(f"Max difference: {np.max(diff)}")
+print(f"Mean difference: {np.mean(diff)}")
+```
+
+## Limitations
+
+<Warning>
+  - First dimension must be batch dimension
+  - Dynamic shapes not supported
+  - Some ONNX operators may not be implemented
+  - Control flow operations (If, Loop) not supported
+</Warning>
+
+## See Also
+
+- [Keras Converter](/api/converters/keras)
+- [PyTorch Converter](/api/converters/pytorch)
+- [Configuration Guide](/api/utils/config)
+- [Model API](/api/model/model)

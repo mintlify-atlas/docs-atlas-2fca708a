@@ -1,0 +1,306 @@
+---
+title: 'Keras Converter'
+description: 'Convert Keras models to HLS'
+---
+
+## convert_from_keras_model
+
+Convert a Keras model to an hls4ml ModelGraph.
+
+```python
+hls4ml.converters.convert_from_keras_model(
+    model,
+    output_dir='my-hls-test',
+    project_name='myproject',
+    input_data_tb=None,
+    output_data_tb=None,
+    backend='Vivado',
+    hls_config=None,
+    bit_exact=None,
+    allow_da_fallback=True,
+    allow_v2_fallback=True,
+    **kwargs
+)
+```
+
+### Parameters
+
+<ParamField path="model" type="keras.Model" required>
+  Keras model to convert. Must be a compiled Keras model.
+</ParamField>
+
+<ParamField path="output_dir" type="str" default="my-hls-test">
+  Output directory for the generated HLS project.
+</ParamField>
+
+<ParamField path="project_name" type="str" default="myproject">
+  Name of the HLS project. Used as the top-level function name.
+</ParamField>
+
+<ParamField path="input_data_tb" type="str" default="None">
+  Path to input test data in `.npy` or `.dat` format for C simulation and co-simulation.
+</ParamField>
+
+<ParamField path="output_data_tb" type="str" default="None">
+  Path to expected output data in `.npy` or `.dat` format for verification.
+</ParamField>
+
+<ParamField path="backend" type="str" default="Vivado">
+  Backend to use. Options: `'Vivado'`, `'Vitis'`, `'Quartus'`, `'Catapult'`.
+</ParamField>
+
+<ParamField path="board" type="str" default="None">
+  Target board from `supported_board.json`. Overrides `part` parameter.
+</ParamField>
+
+<ParamField path="part" type="str" default="None">
+  FPGA part number (e.g., `'xcvu13p-flga2577-2-e'`). Backend-specific defaults used if not provided.
+</ParamField>
+
+<ParamField path="clock_period" type="int" default="5">
+  Clock period in nanoseconds.
+</ParamField>
+
+<ParamField path="clock_uncertainty" type="str" default="12.5%">
+  Clock uncertainty percentage. Defaults: 12.5% (Vivado HLS), 27% (Vitis HLS).
+</ParamField>
+
+<ParamField path="io_type" type="str" default="io_parallel">
+  Interface type: `'io_parallel'` or `'io_stream'`.
+</ParamField>
+
+<ParamField path="hls_config" type="dict" default="None">
+  HLS configuration dictionary. See [Configuration Guide](/api/utils/config) for details.
+</ParamField>
+
+<ParamField path="bit_exact" type="bool" default="None">
+  Enable model-wise fixed-point precision propagation. If `None`, automatically enabled for HGQ models.
+</ParamField>
+
+<ParamField path="allow_da_fallback" type="bool" default="True">
+  (Keras v3 only) Allow fallback to direct acyclic graph combinational logic for unsupported layers.
+</ParamField>
+
+<ParamField path="allow_v2_fallback" type="bool" default="True">
+  (Keras v3 only) Allow fallback to Keras v2 layer handlers for unsupported layers.
+</ParamField>
+
+### Returns
+
+<ResponseField name="hls_model" type="ModelGraph">
+  The converted hls4ml model ready for compilation and synthesis.
+</ResponseField>
+
+### Example
+
+```python
+import tensorflow as tf
+import hls4ml
+
+# Create a simple Keras model
+model = tf.keras.Sequential([
+    tf.keras.layers.Dense(64, activation='relu', input_shape=(10,)),
+    tf.keras.layers.Dense(32, activation='relu'),
+    tf.keras.layers.Dense(1, activation='sigmoid')
+])
+
+# Configure HLS settings
+hls_config = {
+    'Model': {
+        'Precision': 'ap_fixed<16,6>',
+        'ReuseFactor': 4
+    }
+}
+
+# Convert to HLS
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    output_dir='my_prj',
+    project_name='my_keras_model',
+    backend='Vivado',
+    board='pynq-z2',
+    io_type='io_parallel',
+    hls_config=hls_config
+)
+
+# Compile the model
+hls_model.compile()
+
+# Test predictions
+import numpy as np
+X_test = np.random.rand(100, 10)
+predictions = hls_model.predict(X_test)
+```
+
+### Advanced Configuration
+
+```python
+# Layer-specific configuration
+hls_config = {
+    'Model': {
+        'Precision': 'ap_fixed<16,6>',
+        'ReuseFactor': 1,
+        'Strategy': 'Latency'
+    },
+    'LayerName': {
+        'dense_1': {
+            'Precision': 'ap_fixed<18,8>',
+            'ReuseFactor': 2
+        },
+        'output': {
+            'Precision': 'ap_fixed<12,4>'
+        }
+    }
+}
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=hls_config,
+    output_dir='custom_config_prj'
+)
+```
+
+## parse_yaml_config
+
+Parse conversion configuration from a YAML file.
+
+```python
+hls4ml.converters.parse_yaml_config(config_file)
+```
+
+### Parameters
+
+<ParamField path="config_file" type="str" required>
+  Path to the YAML configuration file.
+</ParamField>
+
+### Returns
+
+<ResponseField name="config" type="dict">
+  Parsed configuration dictionary.
+</ResponseField>
+
+### Example YAML
+
+```yaml
+KerasModel: my_model.h5
+OutputDir: my-hls-test
+ProjectName: myproject
+Part: xcvu13p-flga2577-2-e
+ClockPeriod: 5
+IOType: io_stream
+HLSConfig:
+  Model:
+    Precision: ap_fixed<16,6>
+    ReuseFactor: 10
+```
+
+### Usage
+
+```python
+import hls4ml
+
+# Parse YAML config
+config = hls4ml.converters.parse_yaml_config('config.yml')
+
+# Convert model using config
+hls_model = hls4ml.converters.convert_from_config(config)
+```
+
+## convert_from_config
+
+Convert a model using a configuration dictionary or YAML file path.
+
+```python
+hls4ml.converters.convert_from_config(config)
+```
+
+### Parameters
+
+<ParamField path="config" type="str | dict" required>
+  Either a path to a YAML configuration file or a parsed configuration dictionary.
+</ParamField>
+
+### Returns
+
+<ResponseField name="hls_model" type="ModelGraph">
+  The converted hls4ml model.
+</ResponseField>
+
+### Example
+
+```python
+import hls4ml
+
+# From YAML file
+hls_model = hls4ml.converters.convert_from_config('config.yml')
+
+# From dictionary
+config = {
+    'KerasModel': model,
+    'OutputDir': 'my-hls-test',
+    'ProjectName': 'myproject',
+    'Backend': 'Vivado',
+    'HLSConfig': {
+        'Model': {
+            'Precision': 'ap_fixed<16,6>',
+            'ReuseFactor': 4
+        }
+    }
+}
+hls_model = hls4ml.converters.convert_from_config(config)
+```
+
+## Supported Layers
+
+Keras converter supports the following layer types:
+
+### Core Layers
+- `Dense` - Fully connected layer
+- `Activation` - Activation functions (ReLU, tanh, sigmoid, etc.)
+- `Dropout` - Dropout (removed during conversion)
+- `Flatten` - Flatten layer
+- `Reshape` - Reshape layer
+
+### Convolutional Layers
+- `Conv1D` - 1D convolution
+- `Conv2D` - 2D convolution
+- `SeparableConv1D` - Depthwise separable convolution
+- `SeparableConv2D` - 2D depthwise separable convolution
+- `DepthwiseConv2D` - Depthwise convolution
+
+### Pooling Layers
+- `MaxPooling1D` / `MaxPooling2D`
+- `AveragePooling1D` / `AveragePooling2D`
+- `GlobalMaxPooling1D` / `GlobalMaxPooling2D`
+- `GlobalAveragePooling1D` / `GlobalAveragePooling2D`
+
+### Normalization Layers
+- `BatchNormalization`
+- `LayerNormalization`
+
+### Recurrent Layers
+- `SimpleRNN`
+- `LSTM`
+- `GRU`
+- `Bidirectional`
+
+### Merge Layers
+- `Add`, `Subtract`, `Multiply`
+- `Average`, `Maximum`, `Minimum`
+- `Concatenate`
+- `Dot`
+
+### Other Layers
+- `Embedding`
+- `Softmax`
+- `ZeroPadding1D` / `ZeroPadding2D`
+- `UpSampling1D` / `UpSampling2D`
+- `Resize`
+
+## See Also
+
+- [PyTorch Converter](/api/converters/pytorch)
+- [ONNX Converter](/api/converters/onnx)
+- [Configuration Guide](/api/utils/config)
+- [Model API](/api/model/model)

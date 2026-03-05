@@ -1,0 +1,469 @@
+---
+title: FIFO Depth Optimization
+description: Optimize FIFO buffer sizes in streaming architectures
+---
+
+With `io_stream` mode, layers are connected through FIFO buffers. The FIFO Depth Optimization feature automatically sizes these buffers based on runtime profiling, reducing BRAM and LUT usage.
+
+## Overview
+
+In streaming architectures, each layer output is buffered in a FIFO before the next layer consumes it. By default, hls4ml uses conservative FIFO depths that can over-utilize resources. FIFO depth optimization profiles the design during RTL co-simulation to determine the actual maximum FIFO occupancy.
+
+<Info>
+  FIFO depth optimization is available for the **Vivado** and **Vitis** backends.
+</Info>
+
+## How It Works
+
+<Steps>
+  <Step title="Set large profiling FIFOs">
+    All FIFOs are initialized to a large depth (default: 100,000) and implemented in BRAM for profiling.
+  </Step>
+  
+  <Step title="Run RTL co-simulation">
+    The design is simulated with test data, and VCD (Value Change Dump) traces record FIFO occupancy.
+  </Step>
+  
+  <Step title="Extract maximum depths">
+    The optimization pass parses VCD files to determine the maximum depth reached by each FIFO.
+  </Step>
+  
+  <Step title="Resize FIFOs">
+    Each FIFO depth is set to max_depth + 1, minimizing resource usage while ensuring correct functionality.
+  </Step>
+</Steps>
+
+## Basic Usage
+
+### Vivado Backend
+
+```python
+import hls4ml
+from tensorflow.keras.layers import Dense
+from tensorflow.keras.models import Sequential
+
+# Create a simple model
+model = Sequential([
+    Dense(64, input_shape=(16,), activation='relu', name='fc1'),
+    Dense(32, activation='relu', name='fc2'),
+    Dense(32, activation='relu', name='fc3'),
+    Dense(5, activation='softmax', name='fc4')
+])
+
+# Create hls4ml configuration
+config = hls4ml.utils.config_from_keras_model(model, granularity='model')
+
+# Enable FIFO depth optimization flow
+config['Flows'] = ['vivado:fifo_depth_optimization']
+
+# Configure the optimization pass
+hls4ml.model.optimizer.get_optimizer('vivado:fifo_depth_optimization').configure(
+    profiling_fifo_depth=100_000
+)
+
+# Convert model with io_stream
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='hls4mlprj_fifo_opt',
+    backend='Vivado',
+    io_type='io_stream',
+    part='xc7z020clg400-1'
+)
+
+# Build with co-simulation (required for profiling)
+hls_model.build(reset=False, csim=True, synth=True, cosim=True)
+```
+
+### Vitis Backend
+
+```python
+# Same setup as Vivado, but change the backend
+config['Flows'] = ['vitis:fifo_depth_optimization']
+
+hls4ml.model.optimizer.get_optimizer('vitis:fifo_depth_optimization').configure(
+    profiling_fifo_depth=100_000
+)
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='hls4mlprj_fifo_opt_vitis',
+    backend='Vitis',
+    io_type='io_stream',
+    part='xcu250-figd2104-2L-e'
+)
+
+hls_model.build(reset=False, csim=True, synth=True, cosim=True)
+```
+
+<Warning>
+  FIFO depth optimization requires `io_type='io_stream'`. It will fail with `io_parallel` or `io_serial`.
+</Warning>
+
+## Configuration Options
+
+### Profiling FIFO Depth
+
+The initial FIFO depth for profiling:
+
+```python
+# Larger values ensure no overflow during profiling
+# but increase simulation time
+hls4ml.model.optimizer.get_optimizer('vivado:fifo_depth_optimization').configure(
+    profiling_fifo_depth=100_000  # Default
+)
+
+# For smaller models, you might use a smaller value
+hls4ml.model.optimizer.get_optimizer('vivado:fifo_depth_optimization').configure(
+    profiling_fifo_depth=10_000
+)
+
+# To keep default FIFO depths (no profiling)
+hls4ml.model.optimizer.get_optimizer('vivado:fifo_depth_optimization').configure(
+    profiling_fifo_depth=0
+)
+```
+
+<Tabs>
+  <Tab title="Large (100k+)">
+    **Use when:**
+    - Complex models with deep pipelines
+    - Uncertain about peak FIFO usage
+    - First-time optimization
+    
+    **Pros:** Guaranteed not to overflow
+    **Cons:** Longer simulation time, more BRAM during profiling
+  </Tab>
+  
+  <Tab title="Medium (10k-50k)">
+    **Use when:**
+    - Moderate model complexity
+    - Iterating on optimization
+    - Resource-constrained devices
+    
+    **Pros:** Faster simulation
+    **Cons:** May overflow if underestimated
+  </Tab>
+  
+  <Tab title="Disabled (0)">
+    **Use when:**
+    - Keeping default FIFO depths
+    - Debugging without optimization
+    
+    Sets `profiling_fifo_depth=0` to skip profiling entirely.
+  </Tab>
+</Tabs>
+
+## Understanding Results
+
+After optimization completes, a `max_depth.json` file is created:
+
+```json
+[
+    {
+        "name": "layer1_out_V",
+        "max": 127,
+        "depth": 128
+    },
+    {
+        "name": "layer2_out_V",
+        "max": 63,
+        "depth": 64
+    },
+    {
+        "name": "layer3_out_V",
+        "max": 31,
+        "depth": 32
+    }
+]
+```
+
+- **name**: FIFO identifier
+- **max**: Maximum occupancy observed during co-simulation
+- **depth**: Assigned depth (max + 1)
+
+<Info>
+  The optimized FIFO depth is always max + 1 to ensure at least one empty slot.
+</Info>
+
+## Integration with Build Flow
+
+FIFO optimization automatically integrates with the build process:
+
+```python
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='hls4mlprj_fifo_opt',
+    backend='Vivado',
+    io_type='io_stream'
+)
+
+# FIFO optimization runs during build
+hls_model.build(
+    reset=False,   # Don't reset the project
+    csim=True,     # Required for profiling
+    synth=True,    # Required for profiling  
+    cosim=True,    # Required: generates VCD traces
+    validation=False,
+    export=False,
+    vsynth=False,
+    fifo_opt=True  # Explicitly enable (default when flow is set)
+)
+```
+
+### Build Parameters
+
+- **csim=True**: C simulation (required)
+- **synth=True**: C synthesis (required to generate RTL)
+- **cosim=True**: RTL co-simulation (required for profiling)
+- **fifo_opt=True**: Enable FIFO optimization (auto-enabled by flow)
+
+<Note>
+  Skipping `cosim=True` will cause FIFO optimization to fail because VCD traces are not generated.
+</Note>
+
+## Resource Savings
+
+Typical resource savings from FIFO depth optimization:
+
+<CardGroup cols={3}>
+  <Card title="BRAM" icon="memory">
+    20-60% reduction in BRAM usage for FIFO implementation
+  </Card>
+  <Card title="LUT" icon="microchip">
+    10-30% reduction in LUT usage when FIFOs use distributed RAM
+  </Card>
+  <Card title="Timing" icon="clock">
+    May improve timing by reducing routing congestion
+  </Card>
+</CardGroup>
+
+### Example Resource Comparison
+
+| Resource | Default FIFOs | Optimized FIFOs | Savings |
+|----------|---------------|-----------------|----------|
+| BRAM_18K | 48 | 18 | 62.5% |
+| LUT | 12,453 | 9,821 | 21.1% |
+| FF | 15,672 | 14,109 | 10.0% |
+| DSP | 64 | 64 | 0% |
+
+## Advanced Usage
+
+### Custom Test Data
+
+Provide specific test data for profiling:
+
+```python
+import numpy as np
+
+# Generate representative test data
+X_test = np.random.randn(1000, 16).astype(np.float32)
+
+# Save for co-simulation
+hls_model.compile()
+np.save('tb_input_features.npy', X_test)
+
+# Build with co-simulation
+hls_model.build(reset=False, csim=True, synth=True, cosim=True)
+```
+
+<Warning>
+  Test data should be representative of real inputs. Underestimating FIFO depth can cause incorrect results in production.
+</Warning>
+
+### Multiple Optimization Iterations
+
+Refine optimization with multiple passes:
+
+```python
+# First pass: aggressive profiling
+hls4ml.model.optimizer.get_optimizer('vivado:fifo_depth_optimization').configure(
+    profiling_fifo_depth=100_000
+)
+hls_model.build(reset=False, csim=True, synth=True, cosim=True)
+
+# Review max_depth.json
+import json
+with open('hls4mlprj_fifo_opt/max_depth.json') as f:
+    depths = json.load(f)
+    print(depths)
+
+# Second pass: fine-tuning if needed
+# Manually adjust specific FIFOs if profiling was insufficient
+```
+
+### Selective FIFO Optimization
+
+Optimize only specific FIFOs:
+
+```python
+from hls4ml.backends.vivado.passes.fifo_depth_optimization import FifoDepthOptimization
+
+# Custom optimization pass
+class SelectiveFifoOptimization(FifoDepthOptimization):
+    def transform(self, model):
+        # Only optimize output FIFOs of specific layers
+        for var_name, var in model.output_vars.items():
+            if 'fc1' in var_name or 'fc2' in var_name:
+                # Apply optimization
+                continue
+            else:
+                # Keep default depth
+                var.pragma = None
+        
+        return super().transform(model)
+```
+
+## Verification
+
+After FIFO optimization, verify correctness:
+
+### Check Resource Reports
+
+```bash
+# Review synthesis report
+cat hls4mlprj_fifo_opt/myproject_prj/solution1/syn/report/myproject_csynth.rpt
+```
+
+Look for FIFO resource usage in the report.
+
+### Run Additional Co-simulation
+
+```python
+# After optimization, run co-simulation with different data
+hls_model.build(reset=False, cosim=True, validation=True)
+```
+
+Ensure results still match C simulation.
+
+### Compare Accuracy
+
+```python
+import numpy as np
+from tensorflow.keras.models import load_model
+
+# Original Keras model
+keras_model = load_model('model.h5')
+
+# Test data
+X_test = np.random.randn(100, 16).astype(np.float32)
+
+# Compare predictions
+keras_pred = keras_model.predict(X_test)
+hls_pred = hls_model.predict(X_test)
+
+# Check accuracy
+accuracy = np.mean(np.abs(keras_pred - hls_pred) < 0.01)
+print(f"Prediction accuracy: {accuracy * 100:.2f}%")
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Optimization fails: no FIFOs found">
+    **Cause:** FIFOs were not implemented in BRAM during profiling.
+    
+    **Solution:**
+    - Increase `profiling_fifo_depth` (e.g., to 100,000)
+    - Check that `io_type='io_stream'` is set
+    - Verify model has multiple layers (single-layer models may not have FIFOs)
+  </Accordion>
+  
+  <Accordion title="Co-simulation hangs or fails">
+    **Cause:** Profiling FIFOs are too small and overflow.
+    
+    **Solution:**
+    - Increase `profiling_fifo_depth`
+    - Check VCD file for overflow indicators
+    - Use more representative test data
+  </Accordion>
+  
+  <Accordion title="Results incorrect after optimization">
+    **Cause:** FIFO depths were underestimated during profiling.
+    
+    **Solution:**
+    - Use more diverse test data for profiling
+    - Increase profiling FIFO depth
+    - Manually add safety margin to depths in max_depth.json
+  </Accordion>
+  
+  <Accordion title="VCD file not found">
+    **Cause:** RTL co-simulation did not complete.
+    
+    **Solution:**
+    - Ensure `cosim=True` in build command
+    - Check for errors in co-simulation logs
+    - Verify HLS tool installation and license
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+<Steps>
+  <Step title="Use representative test data">
+    Profile with data that exercises all network paths and edge cases. Diverse inputs ensure accurate FIFO depth measurement.
+  </Step>
+  
+  <Step title="Start with large profiling depth">
+    Use `profiling_fifo_depth=100_000` for first-time optimization. You can reduce it in later iterations once you understand peak usage.
+  </Step>
+  
+  <Step title="Verify after optimization">
+    Always run additional co-simulation with different test data to ensure optimized FIFOs are sufficient.
+  </Step>
+  
+  <Step title="Review max_depth.json">
+    Manually inspect the JSON file to understand FIFO usage patterns. Large variations may indicate optimization opportunities elsewhere.
+  </Step>
+  
+  <Step title="Combine with other optimizations">
+    Use FIFO optimization together with precision tuning and reuse factor optimization for maximum resource efficiency.
+  </Step>
+</Steps>
+
+## References
+
+<Card title="Research Paper" icon="file-lines" href="https://arxiv.org/abs/2206.11791">
+  H. Borras et al., "Open-source FPGA-ML codesign for the MLPerf Tiny Benchmark" (2022)
+  
+  Detailed analysis and results of FIFO depth optimization on benchmark models.
+</Card>
+
+## API Reference
+
+### FifoDepthOptimization Pass
+
+```python
+hls4ml.backends.vivado.passes.fifo_depth_optimization.FifoDepthOptimization
+```
+
+**Configuration:**
+```python
+hls4ml.model.optimizer.get_optimizer('vivado:fifo_depth_optimization').configure(
+    profiling_fifo_depth=100_000  # Initial FIFO depth for profiling
+)
+```
+
+**Vitis equivalent:**
+```python
+hls4ml.model.optimizer.get_optimizer('vitis:fifo_depth_optimization').configure(
+    profiling_fifo_depth=100_000
+)
+```
+
+### Build Parameters
+
+```python
+hls_model.build(
+    reset=False,     # Keep existing project
+    csim=True,       # Run C simulation (required)
+    synth=True,      # Run synthesis (required)
+    cosim=True,      # Run RTL co-sim (required for profiling)
+    validation=False,
+    export=False,
+    vsynth=False,
+    fifo_opt=True    # Enable FIFO optimization
+)
+```

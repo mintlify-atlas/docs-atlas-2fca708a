@@ -1,0 +1,411 @@
+---
+title: Model Optimization
+description: Hardware-aware model optimization with pruning and weight sharing
+---
+
+The hls4ml Optimization API provides hardware-aware pruning and weight sharing techniques to reduce model footprint and computational requirements while targeting specific hardware resources.
+
+## Overview
+
+The optimization framework solves a Knapsack optimization problem to maximize model performance while minimizing target resource utilization. It supports multiple objectives including:
+
+- Network sparsity (parameter reduction)
+- GPU FLOPs (computational efficiency)
+- FPGA DSP blocks (hardware multipliers)
+- Memory utilization (BRAM/FF)
+
+## Installation
+
+Optimization features require TensorFlow/Keras:
+
+```bash
+pip install hls4ml tensorflow
+```
+
+## Optimization Structures
+
+The API supports four pruning structures:
+
+<CardGroup cols={2}>
+  <Card title="Unstructured" icon="grid">
+    Removes individual weights. Maximizes flexibility but may not reduce hardware resources efficiently.
+  </Card>
+  <Card title="Structured" icon="layer-group">
+    Removes entire neurons (Dense) or filters (Conv2D). Directly reduces computational requirements.
+  </Card>
+  <Card title="Pattern" icon="table-cells">
+    Groups weights processed by the same DSP. Optimizes DSP utilization in Resource strategy.
+  </Card>
+  <Card title="Block" icon="table">
+    Removes rectangular blocks of weights. Supports only rank-2 layers (Dense).
+  </Card>
+</CardGroup>
+
+## Unstructured Pruning
+
+Minimize total parameter count with weight-level pruning:
+
+```python
+import numpy as np
+from sklearn.metrics import accuracy_score
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.metrics import CategoricalAccuracy
+from tensorflow.keras.losses import CategoricalCrossentropy
+
+from hls4ml.optimization.dsp_aware_pruning.keras import optimize_model
+from hls4ml.optimization.dsp_aware_pruning.keras.utils import get_model_sparsity
+from hls4ml.optimization.dsp_aware_pruning.attributes import get_attributes_from_keras_model
+from hls4ml.optimization.dsp_aware_pruning.objectives import ParameterEstimator
+from hls4ml.optimization.dsp_aware_pruning.scheduler import PolynomialScheduler
+
+# Load model and data
+# baseline_model = ...
+# X_train, y_train, X_val, y_val, X_test, y_test = ...
+
+# Evaluate baseline
+y_baseline = baseline_model.predict(X_test)
+acc_base = accuracy_score(np.argmax(y_test, axis=1), np.argmax(y_baseline, axis=1))
+sparsity, layers = get_model_sparsity(baseline_model)
+
+print(f'Baseline accuracy: {acc_base}')
+print(f'Baseline sparsity: {sparsity}')
+
+# Configure optimization
+epochs = 10
+batch_size = 128
+optimizer = Adam()
+loss_fn = CategoricalCrossentropy(from_logits=True)
+metric = CategoricalAccuracy()
+increasing = True  # Accuracy increases with better performance
+rtol = 0.975        # Allow 2.5% performance drop
+
+# Create sparsity scheduler
+# Polynomial schedule: gradually increase sparsity to 50% over 5 steps
+scheduler = PolynomialScheduler(steps=5, final_sparsity=0.5)
+
+# Get model attributes
+model_attributes = get_attributes_from_keras_model(baseline_model)
+
+# Optimize for minimum parameters
+optimized_model = optimize_model(
+    baseline_model, model_attributes, ParameterEstimator, scheduler,
+    X_train, y_train, X_val, y_val, batch_size, epochs,
+    optimizer, loss_fn, metric, increasing, rtol
+)
+
+# Evaluate optimized model
+y_optimized = optimized_model.predict(X_test)
+acc_optimized = accuracy_score(np.argmax(y_test, axis=1), np.argmax(y_optimized, axis=1))
+sparsity, layers = get_model_sparsity(optimized_model)
+
+print(f'Optimized accuracy: {acc_optimized}')
+print(f'Optimized sparsity: {sparsity}')
+```
+
+## GPU FLOP Optimization
+
+Reduce computational complexity with structured pruning:
+
+```python
+from hls4ml.optimization.dsp_aware_pruning.objectives.gpu_objectives import GPUFLOPEstimator
+
+# Get model attributes
+model_attributes = get_attributes_from_keras_model(baseline_model)
+
+# Optimize for GPU FLOPs (structured pruning)
+optimized_model = optimize_model(
+    baseline_model, model_attributes, GPUFLOPEstimator, scheduler,
+    X_train, y_train, X_val, y_val, batch_size, epochs,
+    optimizer, loss_fn, metric, increasing, rtol
+)
+
+# Structured pruning removes entire neurons/filters
+print("Baseline model:")
+baseline_model.summary()
+
+print("\nOptimized model:")
+optimized_model.summary()
+```
+
+<Note>
+  GPU FLOP optimization performs structured pruning, removing entire neurons or filters. This directly reduces the model architecture size.
+</Note>
+
+## FPGA DSP Optimization
+
+Target Vivado DSP blocks for hardware-efficient designs:
+
+```python
+from hls4ml.utils.config import config_from_keras_model
+from hls4ml.optimization.dsp_aware_pruning.objectives.vivado_objectives import VivadoDSPEstimator
+from hls4ml.optimization import optimize_keras_model_for_hls4ml
+
+# Create hls4ml configuration
+default_reuse_factor = 4
+default_precision = 'ap_fixed<16,6>'
+
+hls_config = config_from_keras_model(
+    baseline_model,
+    granularity='name',
+    default_precision=default_precision,
+    default_reuse_factor=default_reuse_factor
+)
+hls_config['IOType'] = 'io_parallel'
+hls_config['Model']['Strategy'] = 'Resource'  # Required for DSP optimization
+
+# Optimize for Vivado DSPs
+optimized_model = optimize_keras_model_for_hls4ml(
+    baseline_model, hls_config, VivadoDSPEstimator, scheduler,
+    X_train, y_train, X_val, y_val, batch_size, epochs,
+    optimizer, loss_fn, metric, increasing, rtol
+)
+
+# Evaluate
+y_optimized = optimized_model.predict(X_test)
+acc_optimized = accuracy_score(np.argmax(y_test, axis=1), np.argmax(y_optimized, axis=1))
+print(f'Optimized accuracy: {acc_optimized}')
+```
+
+<Warning>
+  For DSP optimization to work correctly, you must use the Resource strategy. After optimization, you can convert to hls4ml with the Unrolled strategy to realize DSP savings.
+</Warning>
+
+### DSP Optimization Workflow
+
+<Steps>
+  <Step title="Configure with Resource strategy">
+    Set `Strategy: 'Resource'` in hls_config to enable pattern-based DSP optimization.
+  </Step>
+  
+  <Step title="Run optimization">
+    Use `optimize_keras_model_for_hls4ml()` with `VivadoDSPEstimator` to optimize the model.
+  </Step>
+  
+  <Step title="Convert to hls4ml">
+    After optimization, create a new config with `Strategy: 'Unrolled'` for synthesis:
+    
+    ```python
+    hls_config = config_from_keras_model(optimized_model)
+    hls_config['Model']['Strategy'] = 'Unrolled'
+    hls_model = hls4ml.converters.convert_from_keras_model(
+        optimized_model, hls_config=hls_config
+    )
+    ```
+  </Step>
+</Steps>
+
+## Additional Objectives
+
+### Vivado FF Optimization
+
+Minimize register (flip-flop) utilization:
+
+```python
+from hls4ml.optimization.dsp_aware_pruning.objectives.vivado_objectives import VivadoFFEstimator
+
+optimized_model = optimize_keras_model_for_hls4ml(
+    baseline_model, hls_config, VivadoFFEstimator, scheduler,
+    X_train, y_train, X_val, y_val, batch_size, epochs,
+    optimizer, loss_fn, metric, increasing, rtol
+)
+```
+
+### Multi-Objective Optimization
+
+Optimize for both DSP and BRAM utilization:
+
+```python
+from hls4ml.optimization.dsp_aware_pruning.objectives.vivado_objectives import VivadoMultiObjectiveEstimator
+
+optimized_model = optimize_keras_model_for_hls4ml(
+    baseline_model, hls_config, VivadoMultiObjectiveEstimator, scheduler,
+    X_train, y_train, X_val, y_val, batch_size, epochs,
+    optimizer, loss_fn, metric, increasing, rtol
+)
+```
+
+## Optimization Schedulers
+
+Schedulers control how sparsity increases during optimization:
+
+### PolynomialScheduler
+
+```python
+from hls4ml.optimization.dsp_aware_pruning.scheduler import PolynomialScheduler
+
+# Increase sparsity polynomially over 10 steps to 75%
+scheduler = PolynomialScheduler(steps=10, final_sparsity=0.75)
+```
+
+### ConstantScheduler
+
+```python
+from hls4ml.optimization.dsp_aware_pruning.scheduler import ConstantScheduler
+
+# Apply constant sparsity increment per step
+scheduler = ConstantScheduler(steps=10, final_sparsity=0.5)
+```
+
+### BinaryScheduler
+
+```python
+from hls4ml.optimization.dsp_aware_pruning.scheduler import BinaryScheduler
+
+# Binary search for optimal sparsity
+scheduler = BinaryScheduler(steps=10, final_sparsity=0.8)
+```
+
+<Info>
+  If `final_sparsity` is not specified, it defaults to 1.0 (100% sparsity). Optimization stops when either the performance threshold is reached or final sparsity is achieved.
+</Info>
+
+## Advanced Configuration
+
+### Custom Regularization Range
+
+```python
+import numpy as np
+
+# Define custom regularization values for weight decay
+regularization_range = np.logspace(-7, -1, num=20).tolist()
+
+optimized_model = optimize_model(
+    baseline_model, model_attributes, ParameterEstimator, scheduler,
+    X_train, y_train, X_val, y_val, batch_size, epochs,
+    optimizer, loss_fn, metric, increasing, rtol,
+    regularization_range=regularization_range
+)
+```
+
+### Knapsack Solver Selection
+
+```python
+# Use greedy algorithm for very large networks (faster but less optimal)
+optimized_model = optimize_model(
+    baseline_model, model_attributes, ParameterEstimator, scheduler,
+    X_train, y_train, X_val, y_val, batch_size, epochs,
+    optimizer, loss_fn, metric, increasing, rtol,
+    knapsack_solver='greedy'  # Default: 'CBC_MIP'
+)
+```
+
+### Local vs Global Pruning
+
+```python
+# Layer-wise (local) pruning
+optimized_model = optimize_model(
+    baseline_model, model_attributes, ParameterEstimator, scheduler,
+    X_train, y_train, X_val, y_val, batch_size, epochs,
+    optimizer, loss_fn, metric, increasing, rtol,
+    local=True  # Default: False (global)
+)
+```
+
+### Ranking Metrics
+
+Choose how to rank weights for pruning:
+
+```python
+# Available: 'l1', 'l2', 'saliency', 'Oracle'
+optimized_model = optimize_model(
+    baseline_model, model_attributes, ParameterEstimator, scheduler,
+    X_train, y_train, X_val, y_val, batch_size, epochs,
+    optimizer, loss_fn, metric, increasing, rtol,
+    ranking_metric='l1'  # Default: 'l1'
+)
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Choose appropriate epochs">
+    For pre-trained models, use 1/3 to 1/2 of the original training epochs at each optimization step. Too few epochs may not recover accuracy; too many waste time.
+  </Accordion>
+  
+  <Accordion title="Set realistic performance tolerance">
+    The `rtol` parameter controls when optimization stops. Common values:
+    - 0.975 (2.5% drop) for classification
+    - 0.95 (5% drop) for aggressive optimization
+    - 0.99 (1% drop) for safety-critical applications
+  </Accordion>
+  
+  <Accordion title="Start with conservative sparsity">
+    Begin with lower target sparsity (30-50%) and gradually increase if accuracy permits. Extremely high sparsity may not converge.
+  </Accordion>
+  
+  <Accordion title="Match objective to deployment">
+    - Use `ParameterEstimator` for model size reduction
+    - Use `GPUFLOPEstimator` for inference speed
+    - Use `VivadoDSPEstimator` when DSPs are the bottleneck
+    - Use `VivadoMultiObjectiveEstimator` for balanced FPGA designs
+  </Accordion>
+  
+  <Accordion title="Verify on real hardware">
+    Always validate optimized models by synthesizing with hls4ml and checking actual resource utilization, not just estimates.
+  </Accordion>
+</AccordionGroup>
+
+## API Reference
+
+### optimize_model()
+
+```python
+hls4ml.optimization.dsp_aware_pruning.keras.optimize_model(
+    keras_model,
+    model_attributes,
+    objective,
+    scheduler,
+    X_train, y_train,
+    X_val, y_val,
+    batch_size,
+    epochs,
+    optimizer,
+    loss_fn,
+    validation_metric,
+    increasing,
+    rtol,
+    callbacks=None,
+    ranking_metric='l1',
+    local=False,
+    verbose=False,
+    rewinding_epochs=1,
+    cutoff_bad_trials=3,
+    directory='hls4ml-optimization',
+    tuner='Bayesian',
+    knapsack_solver='CBC_MIP',
+    regularization_range=None
+)
+```
+
+### optimize_keras_model_for_hls4ml()
+
+```python
+hls4ml.optimization.optimize_keras_model_for_hls4ml(
+    keras_model,
+    hls_config,
+    objective,
+    scheduler,
+    X_train, y_train,
+    X_val, y_val,
+    batch_size,
+    epochs,
+    optimizer,
+    loss_fn,
+    validation_metric,
+    increasing,
+    rtol,
+    **kwargs
+)
+```
+
+Wrapper for `optimize_model()` that automatically extracts attributes from hls4ml config.
+
+### get_model_sparsity()
+
+```python
+from hls4ml.optimization.dsp_aware_pruning.keras.utils import get_model_sparsity
+
+sparsity, layer_sparsity = get_model_sparsity(model)
+```
+
+Returns overall sparsity and per-layer sparsity dictionary.

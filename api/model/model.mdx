@@ -1,0 +1,642 @@
+---
+title: 'ModelGraph'
+description: 'Core model graph representation and operations'
+---
+
+## ModelGraph
+
+The `ModelGraph` class represents the network being processed by hls4ml. It manages layers as nodes in a directed graph and provides methods for compilation, prediction, and synthesis.
+
+```python
+class ModelGraph:
+    def __init__(self, config, inputs=None, outputs=None, initial_index=0)
+```
+
+### Parameters
+
+<ParamField path="config" type="HLSConfig" required>
+  Configuration object containing backend and conversion settings.
+</ParamField>
+
+<ParamField path="inputs" type="list" default="None">
+  List of input variable names. If None, determined automatically.
+</ParamField>
+
+<ParamField path="outputs" type="list" default="None">
+  List of output variable names. If None, determined automatically.
+</ParamField>
+
+<ParamField path="initial_index" type="int" default="0">
+  Starting index for layer numbering.
+</ParamField>
+
+### Attributes
+
+<ResponseField name="config" type="HLSConfig">
+  The model configuration.
+</ResponseField>
+
+<ResponseField name="graph" type="OrderedDict">
+  Dictionary mapping layer names to Layer objects.
+</ResponseField>
+
+<ResponseField name="inputs" type="list">
+  List of input layer names.
+</ResponseField>
+
+<ResponseField name="outputs" type="list">
+  List of output layer names.
+</ResponseField>
+
+<ResponseField name="output_vars" type="dict">
+  Dictionary mapping output names to Variable objects.
+</ResponseField>
+
+## Creating ModelGraph
+
+### from_layer_list
+
+Create a ModelGraph from a list of layer dictionaries.
+
+```python
+@classmethod
+ModelGraph.from_layer_list(
+    config_dict, 
+    layer_list, 
+    inputs=None, 
+    outputs=None,
+    initial_index=0
+)
+```
+
+<ParamField path="config_dict" type="dict" required>
+  Configuration dictionary.
+</ParamField>
+
+<ParamField path="layer_list" type="list" required>
+  List of layer dictionaries with 'name' and 'class_name' keys.
+</ParamField>
+
+<ParamField path="inputs" type="list" default="None">
+  Input layer names.
+</ParamField>
+
+<ParamField path="outputs" type="list" default="None">
+  Output layer names.
+</ParamField>
+
+<ResponseField name="model" type="ModelGraph">
+  The constructed ModelGraph instance.
+</ResponseField>
+
+### Example
+
+```python
+import hls4ml
+
+layer_list = [
+    {'name': 'input', 'class_name': 'InputLayer', 'input_shape': [10]},
+    {'name': 'dense1', 'class_name': 'Dense', 'n_in': 10, 'n_out': 64},
+    {'name': 'relu1', 'class_name': 'Activation', 'activation': 'relu'},
+    {'name': 'output', 'class_name': 'Dense', 'n_in': 64, 'n_out': 1}
+]
+
+config = hls4ml.utils.config.create_config(
+    output_dir='my-hls-test',
+    project_name='myproject'
+)
+
+model = hls4ml.model.ModelGraph.from_layer_list(
+    config,
+    layer_list,
+    inputs=['input'],
+    outputs=['output']
+)
+```
+
+## Core Methods
+
+### write
+
+Write the generated C++ project to disk.
+
+```python
+model.write()
+```
+
+Generates HLS C++ code and writes to the output directory specified in config.
+
+### compile
+
+Compile the generated project for simulation.
+
+```python
+model.compile()
+```
+
+Writes the project to disk and compiles it into a shared library that can be used for `predict()`.
+
+### Example
+
+```python
+import hls4ml
+import numpy as np
+
+# Convert model
+hls_model = hls4ml.converters.convert_from_keras_model(
+    keras_model,
+    output_dir='my-hls-test'
+)
+
+# Compile
+hls_model.compile()
+
+# Test
+X_test = np.random.rand(100, 10)
+y_pred = hls_model.predict(X_test)
+```
+
+### predict
+
+Run inference on the compiled model.
+
+```python
+model.predict(x, *args, **kwargs)
+```
+
+<ParamField path="x" type="numpy.ndarray | list" required>
+  Input data. For single input models, provide a numpy array. For multi-input models, provide a list of arrays.
+</ParamField>
+
+<ResponseField name="predictions" type="numpy.ndarray | list">
+  Model predictions. Single array for single output, list of arrays for multiple outputs.
+</ResponseField>
+
+### Example
+
+```python
+import numpy as np
+
+# Single input/output
+X = np.random.rand(10, 784).astype(np.float32)
+y_pred = hls_model.predict(X)
+
+# Multiple inputs
+X1 = np.random.rand(10, 32).astype(np.float32)
+X2 = np.random.rand(10, 16).astype(np.float32)
+y_pred = hls_model.predict([X1, X2])
+
+# Multiple outputs
+y_pred1, y_pred2 = hls_model.predict(X)
+```
+
+### build
+
+Synthesize the design with HLS tools.
+
+```python
+model.build(
+    reset=False,
+    csim=True,
+    synth=True,
+    cosim=False,
+    validation=False,
+    export=False,
+    vsynth=False
+)
+```
+
+<ParamField path="reset" type="bool" default="False">
+  Reset/clean the project before building.
+</ParamField>
+
+<ParamField path="csim" type="bool" default="True">
+  Run C simulation.
+</ParamField>
+
+<ParamField path="synth" type="bool" default="True">
+  Run HLS synthesis.
+</ParamField>
+
+<ParamField path="cosim" type="bool" default="False">
+  Run C/RTL co-simulation.
+</ParamField>
+
+<ParamField path="validation" type="bool" default="False">
+  Run validation tests.
+</ParamField>
+
+<ParamField path="export" type="bool" default="False">
+  Export IP.
+</ParamField>
+
+<ParamField path="vsynth" type="bool" default="False">
+  Run Vivado synthesis (place and route).
+</ParamField>
+
+<ResponseField name="report" type="dict">
+  Synthesis report with resource usage and timing information.
+</ResponseField>
+
+### Example
+
+```python
+import hls4ml
+
+# Convert model
+hls_model = hls4ml.converters.convert_from_keras_model(
+    keras_model,
+    output_dir='my-hls-test'
+)
+
+# Run synthesis
+report = hls_model.build(
+    csim=True,
+    synth=True,
+    cosim=True,
+    export=True
+)
+
+print(f"Latency: {report['LatencyBest']} - {report['LatencyWorst']} cycles")
+print(f"Interval: {report['IntervalMin']} - {report['IntervalMax']} cycles")
+print(f"LUTs: {report['LUT']}")
+print(f"FFs: {report['FF']}")
+print(f"DSPs: {report['DSP']}")
+print(f"BRAMs: {report['BRAM_18K']}")
+```
+
+### trace
+
+Run inference with layer-by-layer tracing.
+
+```python
+model.trace(x)
+```
+
+<ParamField path="x" type="numpy.ndarray" required>
+  Input data for tracing.
+</ParamField>
+
+<ResponseField name="result" type="tuple">
+  Returns `(predictions, trace_output)` where `trace_output` is a dict mapping layer names to their outputs.
+</ResponseField>
+
+### Example
+
+```python
+import numpy as np
+
+X_test = np.random.rand(5, 10).astype(np.float32)
+predictions, trace = hls_model.trace(X_test)
+
+# Inspect layer outputs
+for layer_name, output in trace.items():
+    print(f"{layer_name}: shape={output.shape}, mean={np.mean(output):.4f}")
+```
+
+## Graph Manipulation
+
+### make_node
+
+Create a new node (layer) for the graph.
+
+```python
+model.make_node(
+    kind, 
+    name, 
+    attributes, 
+    inputs, 
+    outputs=None,
+    initialize=True
+)
+```
+
+<ParamField path="kind" type="str | type" required>
+  Layer type (class name or class).
+</ParamField>
+
+<ParamField path="name" type="str" required>
+  Unique name for the layer.
+</ParamField>
+
+<ParamField path="attributes" type="dict" required>
+  Layer attributes and configuration.
+</ParamField>
+
+<ParamField path="inputs" type="list" required>
+  List of input variable names.
+</ParamField>
+
+<ParamField path="outputs" type="list" default="None">
+  List of output variable names. Defaults to [name].
+</ParamField>
+
+<ParamField path="initialize" type="bool" default="True">
+  Call the layer's initialize() method.
+</ParamField>
+
+<ResponseField name="node" type="Layer">
+  The created layer node.
+</ResponseField>
+
+### Example
+
+```python
+# Create a Dense layer node
+node = model.make_node(
+    kind='Dense',
+    name='new_dense',
+    attributes={
+        'n_in': 64,
+        'n_out': 32,
+        'weight_data': weights,
+        'bias_data': bias
+    },
+    inputs=['prev_layer'],
+    outputs=['new_dense']
+)
+```
+
+### insert_node
+
+Insert a node into the graph.
+
+```python
+model.insert_node(node, before=None, input_idx=0)
+```
+
+<ParamField path="node" type="Layer" required>
+  Node to insert (created with make_node).
+</ParamField>
+
+<ParamField path="before" type="Layer" default="None">
+  Insert before this node. If None, inserts after the node's input.
+</ParamField>
+
+<ParamField path="input_idx" type="int" default="0">
+  Input index for multi-input nodes.
+</ParamField>
+
+### remove_node
+
+Remove a node from the graph.
+
+```python
+model.remove_node(node)
+```
+
+<ParamField path="node" type="Layer" required>
+  Node to remove.
+</ParamField>
+
+<Note>
+  Automatically connects the previous node to the next node.
+</Note>
+
+### replace_node
+
+Replace a node with another.
+
+```python
+model.replace_node(old_node, new_node)
+```
+
+<ParamField path="old_node" type="Layer" required>
+  Node to replace.
+</ParamField>
+
+<ParamField path="new_node" type="Layer" required>
+  Replacement node.
+</ParamField>
+
+### Example: Adding Quantization
+
+```python
+# Get a layer
+dense_layer = model.graph['dense_1']
+
+# Create quantization node
+quant_attrs = {
+    'n_in': dense_layer.get_attr('n_out'),
+    'precision': 'ap_fixed<8,4>'
+}
+
+quant_node = model.make_node(
+    kind='ApplyAlpha',
+    name='quant_dense_1',
+    attributes=quant_attrs,
+    inputs=dense_layer.outputs,
+    outputs=['quant_dense_1']
+)
+
+# Insert after dense layer
+model.insert_node(quant_node)
+```
+
+## Layer Access
+
+### get_layers
+
+Get all layers in the model.
+
+```python
+model.get_layers()
+```
+
+<ResponseField name="layers" type="ValuesView">
+  View of all Layer objects in the graph.
+</ResponseField>
+
+### Example
+
+```python
+for layer in model.get_layers():
+    print(f"{layer.name}: {layer.class_name}")
+    if hasattr(layer, 'weights'):
+        for weight in layer.get_weights():
+            print(f"  {weight.name}: {weight.shape}")
+```
+
+### get_input_variables
+
+Get input variables of the model.
+
+```python
+model.get_input_variables()
+```
+
+<ResponseField name="variables" type="list">
+  List of input Variable objects.
+</ResponseField>
+
+### get_output_variables
+
+Get output variables of the model.
+
+```python
+model.get_output_variables()
+```
+
+<ResponseField name="variables" type="list">
+  List of output Variable objects.
+</ResponseField>
+
+### get_weight_variables
+
+Get all weight variables in the model.
+
+```python
+model.get_weight_variables()
+```
+
+<ResponseField name="variables" type="list">
+  List of all weight Variable objects.
+</ResponseField>
+
+### Example
+
+```python
+# Print input/output info
+for var in model.get_input_variables():
+    print(f"Input: {var.name}, shape: {var.shape}, type: {var.type.precision}")
+
+for var in model.get_output_variables():
+    print(f"Output: {var.name}, shape: {var.shape}, type: {var.type.precision}")
+
+# Count total parameters
+total_params = sum(var.data_length for var in model.get_weight_variables())
+print(f"Total parameters: {total_params}")
+```
+
+## Optimization
+
+### apply_flow
+
+Apply an optimization flow (collection of optimizer passes).
+
+```python
+model.apply_flow(flow, reapply='single')
+```
+
+<ParamField path="flow" type="str" required>
+  Name of the flow to apply.
+</ParamField>
+
+<ParamField path="reapply" type="str" default="single">
+  Reapplication strategy:
+  - `'all'`: Reapply flow and all requirements
+  - `'single'`: Apply flow, skip applied requirements
+  - `'none'`: Skip if already applied
+</ParamField>
+
+### Example
+
+```python
+import hls4ml
+
+# Get model
+hls_model = hls4ml.converters.convert_from_keras_model(keras_model)
+
+# Apply optimization flow
+hls_model.apply_flow('vivado:optimize')
+
+# Apply custom optimization
+hls_model.apply_flow('quantization')
+```
+
+## Serialization
+
+### save
+
+Save the ModelGraph to a file.
+
+```python
+model.save(file_path)
+```
+
+<ParamField path="file_path" type="str" required>
+  Path to save the model (`.fml` format).
+</ParamField>
+
+### Example
+
+```python
+# Save model
+hls_model.save('my_model.fml')
+
+# Load model
+import hls4ml
+loaded_model = hls4ml.converters.load_saved_model('my_model.fml')
+
+# Use loaded model
+loaded_model.compile()
+predictions = loaded_model.predict(test_data)
+```
+
+## HLSConfig
+
+Configuration object managing model settings.
+
+```python
+class HLSConfig:
+    def __init__(self, config)
+```
+
+### Methods
+
+#### get_precision
+
+Get precision for a layer and variable.
+
+```python
+config.get_precision(layer, var='default')
+```
+
+<ResponseField name="result" type="tuple">
+  Returns `(precision, type_name)` tuple.
+</ResponseField>
+
+#### get_reuse_factor
+
+Get reuse factor for a layer.
+
+```python
+config.get_reuse_factor(layer)
+```
+
+<ResponseField name="rf" type="int">
+  The reuse factor.
+</ResponseField>
+
+#### get_strategy
+
+Get implementation strategy for a layer.
+
+```python
+config.get_strategy(layer)
+```
+
+<ResponseField name="strategy" type="str">
+  Strategy: `'latency'` or `'resource'`.
+</ResponseField>
+
+### Example
+
+```python
+for layer in model.get_layers():
+    rf = model.config.get_reuse_factor(layer)
+    strategy = model.config.get_strategy(layer)
+    precision, type_name = model.config.get_precision(layer)
+    
+    print(f"{layer.name}:")
+    print(f"  ReuseFactor: {rf}")
+    print(f"  Strategy: {strategy}")
+    print(f"  Precision: {precision}")
+```
+
+## See Also
+
+- [Graph Optimizer](/api/model/optimizer)
+- [Model Layers](/api/model/graph)
+- [Configuration](/api/utils/config)
+- [Backends](/api/backends/backend)

@@ -1,0 +1,554 @@
+---
+title: 'FPGA Backend'
+description: 'Base FPGA backend with common HLS functionality'
+---
+
+## FPGABackend
+
+Base class for FPGA HLS backends (Vivado, Vitis, Quartus, Catapult). Provides common functionality for precision handling, resource optimization, and code generation.
+
+```python
+class FPGABackend(Backend):
+    def __init__(self, name):
+        super().__init__(name)
+```
+
+## Resource Management
+
+### get_valid_reuse_factors
+
+Calculate valid reuse factors for a layer.
+
+```python
+backend.get_valid_reuse_factors(n_in, n_out)
+```
+
+<ParamField path="n_in" type="int" required>
+  Number of input neurons/channels.
+</ParamField>
+
+<ParamField path="n_out" type="int" required>
+  Number of output neurons/channels.
+</ParamField>
+
+<ResponseField name="valid_rf" type="list">
+  List of valid reuse factor values.
+</ResponseField>
+
+### Example
+
+```python
+from hls4ml.backends import get_backend
+
+backend = get_backend('Vivado')
+
+# For a Dense layer: 128 inputs -> 64 outputs
+valid_rf = backend.get_valid_reuse_factors(128, 64)
+print(f"Valid reuse factors: {valid_rf}")
+# Output: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
+```
+
+### get_closest_reuse_factor
+
+Find the closest valid reuse factor.
+
+```python
+backend.get_closest_reuse_factor(valid_rf, chosen_rf)
+```
+
+<ParamField path="valid_rf" type="list" required>
+  List of valid reuse factors (sorted).
+</ParamField>
+
+<ParamField path="chosen_rf" type="int" required>
+  Desired reuse factor.
+</ParamField>
+
+<ResponseField name="closest_rf" type="int">
+  The nearest valid reuse factor.
+</ResponseField>
+
+### Example
+
+```python
+backend = get_backend('Vivado')
+valid_rf = backend.get_valid_reuse_factors(128, 64)
+
+# User wants RF=10, but it's not valid
+closest = backend.get_closest_reuse_factor(valid_rf, 10)
+print(f"Closest valid RF to 10: {closest}")  # Output: 8
+```
+
+### set_closest_reuse_factor
+
+Set the closest valid reuse factor for a layer.
+
+```python
+backend.set_closest_reuse_factor(
+    layer,
+    n_in,
+    n_out,
+    attribute='reuse_factor',
+    include_max_rf=True
+)
+```
+
+<ParamField path="layer" type="Layer" required>
+  Layer to configure.
+</ParamField>
+
+<ParamField path="n_in" type="int" required>
+  Number of inputs.
+</ParamField>
+
+<ParamField path="n_out" type="int" required>
+  Number of outputs.
+</ParamField>
+
+<ParamField path="attribute" type="str" default="reuse_factor">
+  Attribute name to set.
+</ParamField>
+
+<ParamField path="include_max_rf" type="bool" default="True">
+  Include maximum reuse factor (fully sequential).
+</ParamField>
+
+### Example
+
+```python
+import hls4ml
+
+# Convert model
+hls_model = hls4ml.converters.convert_from_keras_model(keras_model)
+
+backend = hls4ml.backends.get_backend('Vivado')
+
+# Adjust reuse factors
+for layer in hls_model.get_layers():
+    if layer.class_name == 'Dense':
+        n_in = layer.get_attr('n_in')
+        n_out = layer.get_attr('n_out')
+        backend.set_closest_reuse_factor(layer, n_in, n_out)
+        print(f"{layer.name}: RF={layer.get_attr('reuse_factor')}")
+```
+
+## Precision Handling
+
+### convert_precision_string
+
+Convert precision strings to internal types.
+
+```python
+backend.convert_precision_string(precision)
+```
+
+Supported formats:
+
+- **AP Fixed**: `'ap_fixed<16,6>'`, `'ap_ufixed<8,4>'`
+- **AP Int**: `'ap_int<8>'`, `'ap_uint<8>'`
+- **Generic**: `'fixed<16,6>'`, `'int<8>'`
+- **Float**: `'float'`, `'double'`, `'half'`, `'bfloat16'`
+- **AP Float**: `'ap_float<16,5>'`
+- **AC Types**: `'ac_fixed<16,6,true>'`, `'ac_int<8,true>'`
+
+### Examples
+
+```python
+from hls4ml.backends import get_backend
+
+backend = get_backend('Vivado')
+
+# Fixed-point precision
+fp = backend.convert_precision_string('ap_fixed<16,6>')
+print(fp)  # FixedPrecisionType(width=16, integer=6, signed=True)
+
+# With rounding and saturation
+fp_modes = backend.convert_precision_string('ap_fixed<16,6,AP_RND,AP_SAT>')
+print(fp_modes.rounding_mode)  # RoundingMode.RND
+print(fp_modes.saturation_mode)  # SaturationMode.SAT
+
+# Unsigned fixed-point
+ufp = backend.convert_precision_string('ap_ufixed<8,4>')
+print(ufp.signed)  # False
+
+# Integer
+int_p = backend.convert_precision_string('ap_int<8>')
+print(int_p)  # IntegerPrecisionType(width=8, signed=True)
+
+# Float types
+float_p = backend.convert_precision_string('float')
+print(float_p)  # StandardFloatPrecisionType(width=32, exponent=8)
+
+double_p = backend.convert_precision_string('double')
+print(double_p)  # StandardFloatPrecisionType(width=64, exponent=11)
+
+half_p = backend.convert_precision_string('half')
+print(half_p)  # StandardFloatPrecisionType(width=16, exponent=5)
+```
+
+### Precision Inference
+
+The backend can automatically infer appropriate precisions:
+
+```python
+import hls4ml
+
+hls_config = {
+    'Model': {
+        'Precision': 'ap_fixed<16,6>',
+        'ReuseFactor': 1
+    }
+}
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    keras_model,
+    hls_config=hls_config
+)
+
+# Apply precision inference
+hls_model.apply_flow('vivado:infer_precision')
+
+# Check inferred precisions
+for layer in hls_model.get_layers():
+    if hasattr(layer, 'get_output_variable'):
+        var = layer.get_output_variable()
+        print(f"{layer.name}: {var.type.precision}")
+```
+
+## Convolution Optimization
+
+### compute_conv1d_instructions
+
+Generate optimized instructions for 1D convolution.
+
+```python
+backend.compute_conv1d_instructions(
+    in_W,
+    in_C,
+    kernel_size=3,
+    stride=1,
+    pad=0
+)
+```
+
+<ParamField path="in_W" type="int" required>
+  Input width.
+</ParamField>
+
+<ParamField path="in_C" type="int" required>
+  Number of input channels.
+</ParamField>
+
+<ParamField path="kernel_size" type="int" default="3">
+  Convolution kernel size.
+</ParamField>
+
+<ParamField path="stride" type="int" default="1">
+  Stride value.
+</ParamField>
+
+<ParamField path="pad" type="int" default="0">
+  Padding.
+</ParamField>
+
+<ResponseField name="result" type="tuple">
+  Returns `(min_W, windows_int)` - minimal width and window instructions.
+</ResponseField>
+
+### compute_conv2d_instructions
+
+Generate optimized instructions for 2D convolution.
+
+```python
+backend.compute_conv2d_instructions(
+    in_H,
+    in_W,
+    in_C,
+    kernel_size=3,
+    stride=1,
+    pad=0
+)
+```
+
+<ResponseField name="result" type="tuple">
+  Returns `(min_H, min_W, windows_int)` - minimal dimensions and window instructions.
+</ResponseField>
+
+### generate_conv1d_line_buffer_fn
+
+Generate C++ code for 1D convolution line buffer.
+
+```python
+backend.generate_conv1d_line_buffer_fn(
+    layer_idx,
+    n_partitions,
+    in_W,
+    in_C,
+    kernel=3,
+    stride=1,
+    pad=0,
+    dilation=1
+)
+```
+
+<ParamField path="layer_idx" type="int" required>
+  Layer index for naming.
+</ParamField>
+
+<ParamField path="n_partitions" type="int" required>
+  Number of parallel partitions.
+</ParamField>
+
+<ResponseField name="code" type="str">
+  Generated C++ code for the line buffer function.
+</ResponseField>
+
+### generate_conv2d_line_buffer_fn
+
+Generate C++ code for 2D convolution line buffer.
+
+```python
+backend.generate_conv2d_line_buffer_fn(
+    layer_idx,
+    n_partitions,
+    in_H,
+    in_W,
+    in_C,
+    kernel=(3, 3),
+    stride=(1, 1),
+    pad=(0, 0, 0, 0),
+    dilation=(1, 1)
+)
+```
+
+<ResponseField name="code" type="str">
+  Generated C++ code for the line buffer function.
+</ResponseField>
+
+## Product Type Selection
+
+### product_type
+
+Determine which multiplication implementation to use.
+
+```python
+backend.product_type(data_T, weight_T)
+```
+
+<ParamField path="data_T" type="PrecisionType" required>
+  Data/activation precision type.
+</ParamField>
+
+<ParamField path="weight_T" type="PrecisionType" required>
+  Weight precision type.
+</ParamField>
+
+<ResponseField name="product" type="str">
+  Product type: `'mult'`, `'weight_binary'`, `'data_binary'`, `'both_binary'`, `'weight_ternary'`, `'weight_exponential'`.
+</ResponseField>
+
+### Example
+
+```python
+from hls4ml.backends import get_backend
+from hls4ml.model.types import FixedPrecisionType, XnorPrecisionType
+
+backend = get_backend('Vivado')
+
+# Standard multiplication
+data_t = FixedPrecisionType(16, 6)
+weight_t = FixedPrecisionType(16, 6)
+product = backend.product_type(data_t, weight_t)
+print(product)  # 'mult'
+
+# Binary weights
+weight_binary = XnorPrecisionType()
+product = backend.product_type(data_t, weight_binary)
+print(product)  # 'weight_binary'
+
+# Both binary
+data_binary = XnorPrecisionType()
+product = backend.product_type(data_binary, weight_binary)
+print(product)  # 'both_binary'
+```
+
+## Layer Attributes
+
+FPGA backend adds attributes to layers:
+
+### Dense/Conv Layers
+
+- **accum_t**: Accumulator precision type
+- **reuse_factor**: Parallelization factor (1 = fully parallel)
+
+### Activation Layers
+
+- **table_size**: Size of lookup table (for sigmoid, tanh, etc.)
+- **table_t**: Lookup table precision
+
+### Softmax Layers
+
+- **implementation**: `'latency'`, `'stable'`, `'argmax'`, `'legacy'`
+- **skip**: Skip computation (for inference optimization)
+- **exp_table_t**: Exponential table precision
+- **inv_table_t**: Inverse table precision
+
+### Example
+
+```python
+import hls4ml
+
+hls_model = hls4ml.converters.convert_from_keras_model(keras_model)
+
+for layer in hls_model.get_layers():
+    if layer.class_name == 'Dense':
+        print(f"{layer.name}:")
+        print(f"  ReuseFactor: {layer.get_attr('reuse_factor')}")
+        print(f"  AccumType: {layer.get_attr('accum_t')}")
+    
+    elif layer.class_name == 'Activation':
+        print(f"{layer.name}:")
+        print(f"  TableSize: {layer.get_attr('table_size')}")
+        print(f"  TableType: {layer.get_attr('table_t')}")
+```
+
+## Strategy Configuration
+
+### Resource vs Latency
+
+```python
+# Latency strategy - maximize parallelism
+hls_config = {
+    'Model': {
+        'Strategy': 'Latency',
+        'ReuseFactor': 1  # Fully parallel
+    }
+}
+
+# Resource strategy - minimize resource usage
+hls_config = {
+    'Model': {
+        'Strategy': 'Resource',
+        'ReuseFactor': 64  # More sequential
+    }
+}
+
+# Mixed strategy - per layer
+hls_config = {
+    'Model': {
+        'Strategy': 'Latency',
+        'ReuseFactor': 1
+    },
+    'LayerName': {
+        'large_dense': {
+            'Strategy': 'Resource',
+            'ReuseFactor': 32
+        }
+    }
+}
+```
+
+## Compilation
+
+### compile
+
+Compile the generated project.
+
+```python
+backend.compile(model)
+```
+
+Generates a shared library for simulation:
+
+```bash
+output_dir/
+├── firmware/
+│   ├── myproject.cpp
+│   ├── myproject.h
+│   ├── nnet_utils/
+│   └── weights/
+├── build_lib.sh
+└── myproject-<stamp>.so
+```
+
+### Example
+
+```python
+import hls4ml
+import numpy as np
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    keras_model,
+    output_dir='my-hls-test'
+)
+
+# Compile for simulation
+print("Compiling...")
+hls_model.compile()
+
+# Test
+X_test = np.random.rand(10, 784).astype(np.float32)
+y_pred = hls_model.predict(X_test)
+print(f"Predictions shape: {y_pred.shape}")
+```
+
+## Build Process
+
+### build
+
+Run HLS synthesis.
+
+```python
+report = backend.build(
+    model,
+    reset=False,
+    csim=True,
+    synth=True,
+    cosim=False,
+    export=False,
+    vsynth=False
+)
+```
+
+<ResponseField name="report" type="dict">
+  Contains:
+  - `LUT`, `FF`, `DSP`, `BRAM` - Resource usage
+  - `LatencyBest`, `LatencyWorst` - Latency in cycles
+  - `IntervalMin`, `IntervalMax` - Throughput
+  - `ClockPeriod` - Achieved clock period
+</ResponseField>
+
+### Example
+
+```python
+import hls4ml
+
+hls_model = hls4ml.converters.convert_from_keras_model(
+    keras_model,
+    output_dir='synth_test',
+    backend='Vivado'
+)
+
+# Run synthesis
+report = hls_model.build(
+    csim=True,     # C simulation
+    synth=True,    # HLS synthesis
+    cosim=False,   # Skip co-sim (slow)
+    export=False   # Don't export IP
+)
+
+# Print results
+print("\nSynthesis Results:")
+print(f"  LUTs: {report['LUT']}")
+print(f"  FFs: {report['FF']}")
+print(f"  DSPs: {report['DSP']}")
+print(f"  BRAMs: {report['BRAM_18K']}")
+print(f"  Latency: {report['LatencyBest']} - {report['LatencyWorst']} cycles")
+print(f"  II: {report['IntervalMin']} - {report['IntervalMax']} cycles")
+```
+
+## See Also
+
+- [Backend Base](/api/backends/backend)
+- [ModelGraph](/api/model/model)
+- [Configuration](/api/utils/config)

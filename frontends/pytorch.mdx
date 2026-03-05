@@ -1,0 +1,619 @@
+---
+title: 'PyTorch Frontend'
+description: 'Convert PyTorch models to FPGA firmware with hls4ml'
+---
+
+The PyTorch frontend enables conversion of PyTorch models to optimized FPGA firmware using FX graph tracing for comprehensive model analysis.
+
+## Conversion Function
+
+### convert_from_pytorch_model()
+
+The primary function for converting PyTorch models to hls4ml.
+
+```python python
+import torch
+import torch.nn as nn
+import hls4ml
+
+# Define your PyTorch model
+class MyModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(10, 64)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(64, 3)
+    
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
+
+model = MyModel()
+model.eval()  # Set to evaluation mode
+
+# Convert to hls4ml
+hls_model = hls4ml.converters.convert_from_pytorch_model(
+    model,
+    input_shape=(10,),  # Required: specify input shape
+    output_dir='my-hls-test',
+    project_name='myproject',
+    backend='Vivado',
+    io_type='io_parallel',
+    hls_config={'Model': {'Precision': 'ap_fixed<16,6>', 'ReuseFactor': 1}}
+)
+```
+
+#### Parameters
+
+<ParamField path="model" type="torch.nn.Module" required>
+  PyTorch model instance to convert. Model should be in evaluation mode (`.eval()`).
+</ParamField>
+
+<ParamField path="output_dir" type="str" default="my-hls-test">
+  Output directory for the generated HLS project.
+</ParamField>
+
+<ParamField path="project_name" type="str" default="myproject">
+  Name of the HLS project.
+</ParamField>
+
+<ParamField path="backend" type="str" default="Vivado">
+  Backend to use for HLS synthesis. Options: 'Vivado', 'Vitis', 'Quartus', 'oneAPI'.
+</ParamField>
+
+<ParamField path="io_type" type="str" default="io_parallel">
+  I/O implementation type. Options: 'io_parallel', 'io_stream'.
+</ParamField>
+
+<ParamField path="hls_config" type="dict" required>
+  Configuration dictionary for HLS conversion. Must include:
+  - `InputShape`: Tuple specifying input dimensions (without batch dimension)
+  - `Model`: Dictionary with `Precision` and `ReuseFactor`
+</ParamField>
+
+<ParamField path="part" type="str" default="None">
+  Target FPGA part number (e.g., 'xcvu9p-flgb2104-2-i').
+</ParamField>
+
+<ParamField path="clock_period" type="int" default="5">
+  Clock period in nanoseconds.
+</ParamField>
+
+## Complete Example
+
+<CodeGroup>
+```python Simple MLP
+import numpy as np
+import torch
+import torch.nn as nn
+import hls4ml
+
+# Define model
+class SimpleMLP(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(16, 32)
+        self.relu1 = nn.ReLU()
+        self.fc2 = nn.Linear(32, 16)
+        self.relu2 = nn.ReLU()
+        self.fc3 = nn.Linear(16, 8)
+        self.softmax = nn.Softmax(dim=-1)
+    
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu1(x)
+        x = self.fc2(x)
+        x = self.relu2(x)
+        x = self.fc3(x)
+        x = self.softmax(x)
+        return x
+
+# Create and prepare model
+model = SimpleMLP()
+model.eval()
+
+# Test data
+X_test = np.random.rand(1000, 16).astype(np.float32)
+y_pytorch = model(torch.Tensor(X_test)).detach().numpy()
+
+# Configure conversion
+config = hls4ml.utils.config_from_pytorch_model(
+    model,
+    input_shape=(16,),
+    granularity='name'
+)
+config['Model']['Precision'] = 'ap_fixed<16,6>'
+config['Model']['ReuseFactor'] = 4
+
+# Convert to hls4ml
+hls_model = hls4ml.converters.convert_from_pytorch_model(
+    model,
+    hls_config=config,
+    output_dir='pytorch_mlp_hls',
+    backend='Vivado'
+)
+
+# Compile and test
+hls_model.compile()
+y_hls = hls_model.predict(X_test)
+
+print(f"Accuracy match: {np.mean(np.argmax(y_pytorch, axis=1) == np.argmax(y_hls, axis=1))}")
+```
+
+```python CNN Model
+import torch
+import torch.nn as nn
+import hls4ml
+
+class SimpleCNN(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, padding=1)
+        self.relu1 = nn.ReLU()
+        self.pool1 = nn.MaxPool2d(2)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
+        self.relu2 = nn.ReLU()
+        self.pool2 = nn.MaxPool2d(2)
+        self.flatten = nn.Flatten()
+        self.fc = nn.Linear(32 * 8 * 8, 10)
+    
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.relu1(x)
+        x = self.pool1(x)
+        x = self.conv2(x)
+        x = self.relu2(x)
+        x = self.pool2(x)
+        x = self.flatten(x)
+        x = self.fc(x)
+        return x
+
+model = SimpleCNN()
+model.eval()
+
+# Note: PyTorch uses channels_first format (N, C, H, W)
+config = hls4ml.utils.config_from_pytorch_model(
+    model,
+    input_shape=(3, 32, 32),  # (channels, height, width)
+    granularity='name'
+)
+
+hls_model = hls4ml.converters.convert_from_pytorch_model(
+    model,
+    hls_config=config,
+    output_dir='pytorch_cnn_hls',
+    backend='Vivado',
+    io_type='io_stream'
+)
+```
+
+```python From Saved Model
+import torch
+import hls4ml
+
+# Load saved PyTorch model
+model = torch.load('model.pth')
+model.eval()
+
+# Or load state dict
+# model = MyModel()
+# model.load_state_dict(torch.load('model_state.pth'))
+# model.eval()
+
+config = {
+    'PytorchModel': model,
+    'InputShape': (10,),  # Required!
+    'OutputDir': 'my-hls-test',
+    'ProjectName': 'myproject',
+    'Part': 'xcvu9p-flgb2104-2-i',
+    'ClockPeriod': 5,
+    'IOType': 'io_parallel',
+    'HLSConfig': {
+        'Model': {
+            'Precision': 'ap_fixed<16,6>',
+            'ReuseFactor': 8
+        }
+    }
+}
+
+hls_model = hls4ml.converters.convert_from_config(config)
+hls_model.compile()
+```
+
+```python Multi-Input Model
+import torch
+import torch.nn as nn
+import hls4ml
+
+class MultiInputModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(10, 20)
+        self.fc2 = nn.Linear(5, 20)
+        self.fc3 = nn.Linear(40, 8)
+    
+    def forward(self, x1, x2):
+        x1 = self.fc1(x1)
+        x2 = self.fc2(x2)
+        x = torch.cat([x1, x2], dim=-1)
+        x = self.fc3(x)
+        return x
+
+model = MultiInputModel()
+model.eval()
+
+# For multi-input models, specify tuple of input shapes
+config = hls4ml.utils.config_from_pytorch_model(
+    model,
+    input_shape=[(10,), (5,)],  # List of input shapes
+    granularity='name'
+)
+
+hls_model = hls4ml.converters.convert_from_pytorch_model(
+    model,
+    hls_config=config,
+    output_dir='multi_input_hls'
+)
+```
+</CodeGroup>
+
+## Supported Layers
+
+The PyTorch frontend uses FX graph tracing to extract model structure and supports:
+
+### Core Layers (torch.nn)
+- **Linear** - Fully connected layers
+- **ReLU** - Rectified Linear Unit
+- **Sigmoid** - Sigmoid activation
+- **Tanh** - Hyperbolic tangent
+- **LeakyReLU** - Leaky ReLU with negative slope
+- **ELU** - Exponential Linear Unit
+- **PReLU** - Parametric ReLU
+- **Threshold** - Thresholded activation
+- **Softmax** - Softmax activation
+
+### Convolutional Layers
+- **Conv1d** - 1D convolution
+- **Conv2d** - 2D convolution
+- **BatchNorm1d** - 1D batch normalization
+- **BatchNorm2d** - 2D batch normalization
+
+### Pooling Layers
+- **MaxPool1d** - 1D max pooling
+- **MaxPool2d** - 2D max pooling
+- **AvgPool1d** - 1D average pooling
+- **AvgPool2d** - 2D average pooling
+- **AdaptiveAvgPool1d** - Adaptive average pooling
+- **AdaptiveAvgPool2d** - Adaptive average pooling
+
+### Recurrent Layers
+- **RNN** - Simple RNN
+- **LSTM** - Long Short-Term Memory
+- **GRU** - Gated Recurrent Unit
+
+### Merge/Arithmetic Operations
+- **Add** (torch.add, +) - Element-wise addition
+- **Sub** (torch.sub, -) - Element-wise subtraction
+- **Mul** (torch.mul, *) - Element-wise multiplication
+- **Concat** (torch.cat) - Tensor concatenation
+- **MatMul** (torch.matmul) - Matrix multiplication
+
+### Reshape Operations
+- **Flatten** - Flatten input
+- **View** - Reshape tensor
+- **Transpose** - Transpose dimensions
+- **Permute** - Permute dimensions
+
+### Special Operations
+- **Dropout** - Training-only layer (skipped)
+- **Sequential** - Container (transparent)
+- **Constant** - Constant tensors
+
+### Functional Operations (torch.nn.functional)
+Many operations from `torch.nn.functional` are supported:
+- `F.relu`, `F.sigmoid`, `F.tanh`
+- `F.max_pool1d`, `F.max_pool2d`
+- `F.avg_pool1d`, `F.avg_pool2d`
+- `F.softmax`
+
+## Framework-Specific Configuration
+
+### Input Shape Requirement
+
+<Warning>
+PyTorch conversion **requires** specifying the input shape explicitly (without batch dimension).
+</Warning>
+
+```python python
+# Correct - without batch dimension
+config = {'InputShape': (10,)}  # For 1D input
+config = {'InputShape': (3, 32, 32)}  # For images (C, H, W)
+
+# For multiple inputs
+config = {'InputShape': [(10,), (5,)]}  # Two inputs
+```
+
+### Channels First Format
+
+PyTorch uses `channels_first` format by default (N, C, H, W), while hls4ml expects `channels_last` (N, H, W, C).
+
+```python python
+# hls4ml automatically handles conversion for io_parallel
+hls_model = hls4ml.converters.convert_from_pytorch_model(
+    model,
+    hls_config=config,
+    io_type='io_parallel'  # Automatic transpose layers added
+)
+
+# For io_stream, you may need to transpose manually
+# Not all transpose operations are supported with io_stream
+```
+
+### Model Evaluation Mode
+
+<Note>
+Always set your model to evaluation mode before conversion to disable dropout and use fixed batch norm statistics.
+</Note>
+
+```python python
+model = MyModel()
+model.eval()  # Critical!
+
+# Or use torch.no_grad() context
+with torch.no_grad():
+    hls_model = hls4ml.converters.convert_from_pytorch_model(
+        model,
+        hls_config=config
+    )
+```
+
+### Layer Configuration by Name
+
+```python python
+# Get layer names from PyTorch model
+for name, module in model.named_modules():
+    print(f"{name}: {module.__class__.__name__}")
+
+# Configure specific layers
+config = hls4ml.utils.config_from_pytorch_model(model, input_shape=(10,))
+config['LayerName']['fc1'] = {
+    'Precision': 'ap_fixed<8,3>',
+    'ReuseFactor': 16
+}
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+<Accordion title="Must specify input shape error">
+PyTorch conversion always requires explicit input shape:
+
+```python python
+# Error: Missing InputShape
+hls_config = {'Model': {'Precision': 'ap_fixed<16,6>'}}
+
+# Fix: Add InputShape
+hls_config = {
+    'InputShape': (10,),  # Required!
+    'Model': {'Precision': 'ap_fixed<16,6>'}
+}
+
+hls_model = hls4ml.converters.convert_from_pytorch_model(
+    model,
+    hls_config=hls_config
+)
+```
+</Accordion>
+
+<Accordion title="Unsupported layer or operation">
+Common unsupported operations and solutions:
+
+```python python
+# Issue: F.linear is not supported
+# Solution: Use nn.Linear instead
+class MyModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn(10, 5))
+    
+    def forward(self, x):
+        # Don't use: return F.linear(x, self.weight)
+        # Use instead:
+        self.fc = nn.Linear(5, 10)
+        return self.fc(x)
+
+# Issue: torch.nn.functional.conv2d not supported
+# Solution: Use nn.Conv2d module
+```
+
+Use `torch.nn` modules instead of functional operations where possible.
+</Accordion>
+
+<Accordion title="Graph tracing issues">
+Some dynamic operations may cause tracing issues:
+
+```python python
+# Problematic: Dynamic control flow
+class BadModel(nn.Module):
+    def forward(self, x):
+        if x.sum() > 0:  # Dynamic condition
+            return self.fc1(x)
+        return self.fc2(x)
+
+# Solution: Use static control flow or torch.jit.script
+class GoodModel(nn.Module):
+    def forward(self, x):
+        # Static operations only
+        return self.fc1(x) + self.fc2(x)
+
+# Or: Pre-trace with representative input
+import torch.fx
+tracer = torch.fx.Tracer()
+traced = tracer.trace(model)
+```
+</Accordion>
+
+<Accordion title="Channels format issues">
+For `io_stream` with channels_first:
+
+```python python
+# Issue: Automatic transpose not supported for io_stream
+hls_model = hls4ml.converters.convert_from_pytorch_model(
+    model,
+    hls_config=config,
+    io_type='io_stream'  # May fail with conv layers
+)
+
+# Solution 1: Use io_parallel
+io_type='io_parallel'
+
+# Solution 2: Manually transpose in model
+class ChannelsLastModel(nn.Module):
+    def forward(self, x):
+        x = x.permute(0, 2, 3, 1)  # NCHW -> NHWC
+        # ... rest of forward pass
+        return x
+```
+</Accordion>
+
+<Accordion title="Precision mismatch">
+Improve PyTorch-to-HLS accuracy:
+
+```python python
+# 1. Use higher precision
+config['Model']['Precision'] = 'ap_fixed<32,16>'
+
+# 2. Configure specific layers
+config['LayerName']['fc1'] = {'Precision': 'ap_fixed<24,12>'}
+
+# 3. Check input data type matches
+X_test = X_test.astype(np.float32)  # Match PyTorch default
+
+# 4. Use same random seed
+torch.manual_seed(42)
+np.random.seed(42)
+```
+</Accordion>
+
+<Accordion title="Convolution groups not supported">
+```python python
+# Issue: Grouped convolutions (groups > 1)
+self.conv = nn.Conv2d(32, 64, 3, groups=2)  # Not supported
+
+# Solution: Use groups=1 (default)
+self.conv = nn.Conv2d(32, 64, 3, groups=1)
+
+# For depthwise separable, use separate layers
+self.depthwise = nn.Conv2d(32, 32, 3, groups=32)  # Depthwise
+self.pointwise = nn.Conv2d(32, 64, 1)  # Pointwise
+```
+</Accordion>
+</AccordionGroup>
+
+## Advanced Usage
+
+### Using FX Graph Tracing Directly
+
+```python python
+import torch
+from torch.fx import symbolic_trace
+from hls4ml.converters.pytorch_to_hls import parse_pytorch_model
+
+# Trace model
+model.eval()
+traced = symbolic_trace(model)
+
+# Inspect graph
+for node in traced.graph.nodes:
+    print(f"{node.name}: {node.op} {node.target}")
+
+# Convert traced model
+config = {
+    'PytorchModel': model,
+    'InputShape': (10,),
+    'HLSConfig': {'Model': {'Precision': 'ap_fixed<16,6>'}}
+}
+
+layer_list, inputs, outputs = parse_pytorch_model(config, verbose=True)
+```
+
+### Custom Layer Handlers
+
+```python python
+from hls4ml.converters import register_pytorch_layer_handler
+from hls4ml.converters.pytorch_to_hls import pytorch_handler
+
+@pytorch_handler('MyCustomLayer')
+def parse_custom_layer(operation, layer_name, input_names, input_shapes, 
+                       node, class_object, data_reader, config):
+    layer = {}
+    layer['class_name'] = 'CustomLayer'
+    layer['name'] = layer_name
+    layer['inputs'] = input_names
+    
+    # Extract parameters from class_object
+    if class_object is not None:
+        layer['custom_param'] = class_object.custom_param
+    
+    # Calculate output shape
+    output_shape = input_shapes[0]
+    
+    return layer, output_shape
+```
+
+### Handling State Dictionaries
+
+```python python
+# Load model with state dict
+class MyModel(nn.Module):
+    # ... model definition
+
+model = MyModel()
+state_dict = torch.load('model_weights.pth')
+model.load_state_dict(state_dict)
+model.eval()
+
+# Convert
+hls_model = hls4ml.converters.convert_from_pytorch_model(
+    model,
+    hls_config=config
+)
+```
+
+## PyTorch vs Keras Differences
+
+| Aspect | PyTorch | Keras |
+|--------|---------|-------|
+| Input shape | **Required** in config | Optional (read from model) |
+| Data format | channels_first (NCHW) | channels_last (NHWC) |
+| Model mode | Must call `.eval()` | N/A |
+| Tracing | Uses FX graph tracing | Direct layer iteration |
+| Functional ops | Limited support | N/A |
+| Dynamic graphs | Not supported | N/A |
+
+## Source Code Reference
+
+The PyTorch converter implementation can be found at:
+- `hls4ml/converters/pytorch_to_hls.py:440` - Main conversion function
+- `hls4ml/converters/pytorch/` - Layer-specific handlers
+- `hls4ml/converters/__init__.py:251` - API entry point
+- `hls4ml/utils/torch.py` - Custom FX tracer
+
+## Next Steps
+
+<CardGroup cols={2}>
+<Card title="Keras Frontend" icon="layer-group" href="/frontends/keras">
+  Compare with Keras conversion
+</Card>
+<Card title="Configuration" icon="gear" href="/concepts/model-conversion">
+  Learn about configuration options
+</Card>
+<Card title="Optimization" icon="gauge-high" href="/advanced/optimization">
+  Optimize PyTorch models for FPGA
+</Card>
+<Card title="Backends" icon="microchip" href="/concepts/hls-backends">
+  Explore FPGA backend options
+</Card>
+</CardGroup>

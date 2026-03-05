@@ -1,0 +1,614 @@
+---
+title: 'oneAPI Backend'
+description: 'Deploy neural networks on Intel/Altera FPGAs using Intel oneAPI'
+icon: 'microchip'
+---
+
+## Overview
+
+The **oneAPI** backend enables deployment of neural networks on Intel/Altera FPGAs using the Intel oneAPI DPC++/SYCL compiler. It is the modern replacement for the deprecated Quartus backend, offering better streaming support and integration with Intel's oneAPI ecosystem.
+
+### When to Use oneAPI Backend
+
+- **Intel/Altera FPGAs**: Target Agilex, Stratix 10, or newer devices
+- **Modern development**: Use latest Intel FPGA tools and workflows
+- **Streaming architectures**: Better io_stream support with task parallelism
+- **Python integration**: Seamless integration with Python runtime
+
+<Note>
+  The oneAPI backend is actively developed and is the recommended choice for Intel FPGA projects.
+</Note>
+
+## Installation and Setup
+
+### Prerequisites
+
+- **Intel oneAPI Base Toolkit** with DPC++ compiler
+- **Intel Quartus Prime** for FPGA synthesis
+- Python 3.8 or higher
+- hls4ml library installed
+- CMake 3.10 or higher
+
+### Environment Setup
+
+```bash
+# Source oneAPI environment
+source /opt/intel/oneapi/setvars.sh
+
+# Verify compiler is available
+which icpx
+icpx --version
+
+# Verify Quartus (optional, for FPGA synthesis)
+which quartus_sh
+```
+
+## Configuration
+
+### Basic Configuration
+
+Create a model configuration for the oneAPI backend:
+
+```python
+import hls4ml
+
+config = hls4ml.utils.config_from_keras_model(
+    model,
+    granularity='name',
+    backend='oneAPI'
+)
+
+# Convert model
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='my_oneapi_project',
+    backend='oneAPI',
+    part='Agilex7',
+    clock_period=5,
+    io_type='io_parallel'
+)
+```
+
+### Configuration Options
+
+<ParamField path="part" type="string" default="Agilex7">
+  FPGA device family:
+  - `Agilex7`
+  - `Agilex`
+  - `Stratix10`
+  - `Arria10`
+</ParamField>
+
+<ParamField path="clock_period" type="int" default="5">
+  Clock period in nanoseconds (5ns = 200MHz)
+</ParamField>
+
+<ParamField path="hyperopt_handshake" type="bool" default="false">
+  Enable hyper-optimized handshaking between kernels
+</ParamField>
+
+<ParamField path="io_type" type="string" default="io_parallel">
+  I/O implementation type:
+  - `io_parallel`: Single task with pipelining
+  - `io_stream`: Multiple tasks with pipes
+</ParamField>
+
+<ParamField path="write_tar" type="bool" default="false">
+  Compress output directory into .tar.gz file
+</ParamField>
+
+### Layer Configuration
+
+<Warning>
+  The oneAPI backend **only supports Resource strategy**. There is no Latency implementation.
+</Warning>
+
+#### Dense Layers
+
+```python
+config['dense_layer'] = {
+    'ReuseFactor': 16,
+    'Strategy': 'Resource',  # Only Resource supported
+    'Precision': 'ac_fixed<16,6,true>',
+    'accum_t': 'ac_fixed<24,12,true>'
+}
+```
+
+#### Convolutional Layers
+
+```python
+config['conv2d_layer'] = {
+    'ReuseFactor': 8,
+    'ParallelizationFactor': 1,
+    'Implementation': 'im2col',  # or 'Winograd', 'combination'
+    'Precision': 'ac_fixed<16,6,true>'
+}
+```
+
+**Convolution Implementations:**
+- `im2col`: Image-to-column + matrix multiply (default)
+- `Winograd`: Fast convolution for 3x3 filters
+- `combination`: Compile-time selection
+
+#### Recurrent Layers
+
+```python
+config['lstm_layer'] = {
+    'ReuseFactor': 1,
+    'RecurrentReuseFactor': 1,
+    'Strategy': 'Resource',
+    'table_size': 1024,
+    'table_t': 'ac_fixed<18,8,true>'
+}
+```
+
+## Build Process
+
+### Build Commands
+
+The oneAPI backend uses CMake for building:
+
+```python
+# Compile the model
+hls_model.compile()
+
+# Build for different targets
+report = hls_model.build(
+    build_type='fpga_emu',  # Emulation
+    run=False  # Run after build
+)
+
+# Available build types:
+# - 'fpga_emu': Fast emulation on CPU
+# - 'fpga_sim': Accurate RTL simulation
+# - 'report': Generate optimization reports
+# - 'fpga': Full FPGA compilation
+# - 'lib': Python-callable library
+```
+
+### Build Targets
+
+<Accordion title="oneAPI Build Targets">
+
+| Target | Description | Time | Accuracy |
+|--------|-------------|------|----------|
+| `fpga_emu` | CPU emulation | Seconds | Functional |
+| `fpga_sim` | RTL simulation | Minutes | Cycle-accurate |
+| `report` | Optimization report | Minutes | Area/performance estimates |
+| `fpga` | Full FPGA compile | Hours | Exact |
+| `lib` | Shared library | Minutes | Functional |
+
+</Accordion>
+
+### CMake Build System
+
+```bash
+cd my_oneapi_project
+mkdir -p build
+cd build
+
+# Configure
+cmake ..
+
+# Build targets
+make fpga_emu    # Emulation
+make report      # Reports
+make fpga_sim    # Simulation
+make fpga        # FPGA bitfile
+make lib         # Python library
+
+# Run emulation
+./myproject.fpga_emu
+```
+
+## Example Project Structure
+
+```
+my_oneapi_project/
+├── firmware/
+│   ├── myproject.cpp          # SYCL kernel implementation
+│   ├── myproject.h            # Header declarations
+│   ├── parameters.h           # Network parameters
+│   ├── defines.h              # Macro definitions
+│   ├── weights/               # Weight data files
+│   └── nnet_utils/            # Utility functions
+├── tb_data/
+│   ├── tb_input_features.dat
+│   └── tb_output_predictions.dat
+├── myproject_test.cpp         # Host code (testbench)
+├── CMakeLists.txt             # CMake configuration
+├── build/                     # Build directory
+│   ├── myproject.fpga_emu     # Emulation executable
+│   ├── myproject.fpga_sim     # Simulation executable
+│   ├── myproject.fpga         # FPGA executable
+│   ├── libmyproject-*.so      # Python library
+│   └── reports/               # Optimization reports
+└── README.md
+```
+
+## I/O Types: io_parallel vs io_stream
+
+### io_parallel
+
+**Single Task Architecture:**
+- All layers execute in one SYCL task
+- Relies on pipelining within the task
+- Lower overhead for small models
+- Sequential layer execution
+
+```cpp
+// Generated SYCL code structure
+queue.submit([&](handler &h) {
+    h.single_task<MyProject>([=]() {
+        // All layers in one kernel
+        layer1_output = layer1(input);
+        layer2_output = layer2(layer1_output);
+        output = layer3(layer2_output);
+    });
+});
+```
+
+### io_stream
+
+**Multi-Task Architecture:**
+- Each layer in separate `task_sequence`
+- Layers execute in parallel
+- Connected via SYCL pipes
+- Higher throughput for large models
+- Similar to dataflow in Vitis HLS
+
+```cpp
+// Generated SYCL code structure
+queue.submit([&](handler &h) {
+    h.single_task<Layer1>([=]() {
+        auto data = input_pipe::read();
+        auto result = layer1(data);
+        layer1_to_layer2_pipe::write(result);
+    });
+});
+
+queue.submit([&](handler &h) {
+    h.single_task<Layer2>([=]() {
+        auto data = layer1_to_layer2_pipe::read();
+        auto result = layer2(data);
+        layer2_to_layer3_pipe::write(result);
+    });
+});
+```
+
+### Choosing io_type
+
+```python
+# Small models (< 5 layers)
+config = {'Model': {'IOType': 'io_parallel'}}
+
+# Large models (> 5 layers) or streaming data
+config = {'Model': {'IOType': 'io_stream'}}
+```
+
+## Precision Types
+
+oneAPI backend uses Algorithmic C (AC) datatypes:
+
+```python
+# Fixed-point: ac_fixed<width, int_width, signed>
+config['layer']['Precision'] = 'ac_fixed<16,6,true>'
+config['layer']['accum_t'] = 'ac_fixed<24,12,true>'
+
+# Integer: ac_int<width, signed>
+config['layer']['index_t'] = 'ac_int<8,false>'
+```
+
+### Common Precision Settings
+
+```python
+# High precision (16-bit)
+config['layer']['Precision'] = 'ac_fixed<16,6,true>'
+
+# Quantized (8-bit)
+config['layer']['Precision'] = 'ac_fixed<8,3,true>'
+
+# Wide accumulator
+config['layer']['accum_t'] = 'ac_fixed<32,16,true>'
+```
+
+## Performance Optimization
+
+### Reuse Factor Tuning
+
+```python
+# High parallelism, more resources
+config['dense']['ReuseFactor'] = 1
+
+# Balanced
+config['dense']['ReuseFactor'] = 16
+
+# Low resources, higher latency
+config['dense']['ReuseFactor'] = 64
+```
+
+### Hyperopt Handshaking
+
+Enable optimized communication between tasks:
+
+```python
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    backend='oneAPI',
+    hyperopt_handshake=True  # Enable optimized handshaking
+)
+```
+
+Benefits:
+- Reduced latency between tasks
+- Better throughput for io_stream
+- Optimized FIFO depths
+
+### Winograd Convolution
+
+Automatic transformation for 3x3 convolutions:
+
+```python
+config['conv2d'] = {
+    'Implementation': 'Winograd',  # or 'combination'
+    'ReuseFactor': 8
+}
+```
+
+## Python Integration
+
+### Compile for Python
+
+```python
+# Build shared library
+library_path = hls_model.compile()
+
+# Or explicitly build library
+report = hls_model.build(build_type='lib', run=False)
+```
+
+### Use in Python
+
+```python
+import numpy as np
+
+# Predict with compiled library
+X_test = np.random.rand(100, 784).astype(np.float32)
+y_pred = hls_model.predict(X_test)
+
+print(f"Predictions shape: {y_pred.shape}")
+```
+
+## Performance Characteristics
+
+### Resource Usage Estimates
+
+**Small MLP (3 layers, 64 neurons):**
+- ALMs: 8K-20K
+- DSPs: 15-35
+- M20K: 15-40
+- Registers: 10K-30K
+
+**CNN (3 conv + 2 dense):**
+- ALMs: 50K-150K
+- DSPs: 100-300
+- M20K: 100-400
+- Registers: 50K-200K
+
+### Latency Patterns
+
+**io_parallel:**
+```
+Latency = Σ(layer_operations / parallel_operations)
+Throughput = 1 / latency (no pipelining between inferences)
+```
+
+**io_stream:**
+```
+Latency = Σ(layer_latency)
+Throughput = 1 / max(layer_II) (pipelined)
+```
+
+### Clock Frequencies
+
+- **Agilex 7**: 300-450 MHz
+- **Stratix 10**: 300-400 MHz
+- **Arria 10**: 200-300 MHz
+
+## Advanced Features
+
+### EinsumDense Support
+
+oneAPI backend supports Einsum operations:
+
+```python
+from tensorflow.keras.layers import EinsumDense
+
+model = Sequential([
+    EinsumDense(
+        equation='ab,bc->ac',
+        output_shape=(64,),
+        bias_axes='c'
+    )
+])
+
+# Converts automatically
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model, backend='oneAPI'
+)
+```
+
+### Custom Parallelization
+
+```python
+config['einsum_dense'] = {
+    'parallelization_factor': 4,
+    'Strategy': 'resource'
+}
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="icpx compiler not found">
+    ```bash
+    # Source oneAPI environment
+    source /opt/intel/oneapi/setvars.sh
+    
+    # Verify installation
+    which icpx
+    icpx --version
+    
+    # Check oneAPI installation
+    ls /opt/intel/oneapi/compiler/latest/
+    ```
+  </Accordion>
+
+  <Accordion title="CMake configuration failed">
+    ```bash
+    # Ensure CMake version is sufficient
+    cmake --version  # Should be >= 3.10
+    
+    # Clean build directory
+    rm -rf build
+    mkdir build
+    cd build
+    cmake ..
+    ```
+  </Accordion>
+
+  <Accordion title="Softmax dimension error (io_parallel)">
+    ```python
+    # Softmax requires 1D input in io_parallel mode
+    
+    # ❌ Wrong:
+    model.add(Conv2D(...))
+    model.add(Softmax())  # Multi-dimensional
+    
+    # ✅ Correct:
+    model.add(Conv2D(...))
+    model.add(Flatten())  # Flatten to 1D
+    model.add(Dense(10))
+    model.add(Softmax())  # 1D input
+    ```
+  </Accordion>
+
+  <Accordion title="Resource usage too high">
+    - Increase reuse factors
+    - Use io_stream for large models
+    - Reduce precision
+    - Enable weight compression (not yet supported)
+    - Partition model into smaller graphs
+  </Accordion>
+
+  <Accordion title="AC type validation failed">
+    The oneAPI backend validates AC datatypes:
+    ```python
+    # Ensure all precision specifications are valid AC types
+    config['layer']['Precision'] = 'ac_fixed<16,6,true>'  # Valid
+    # Not: 'ap_fixed<16,6>' (Xilinx type)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Differences from Quartus Backend
+
+| Feature | Quartus (i++) | oneAPI (icpx) |
+|---------|---------------|---------------|
+| Compiler | Intel HLS | DPC++/SYCL |
+| Build System | Makefile | CMake |
+| io_stream | Limited | Full support with task_sequence |
+| Python Integration | Not supported | Native support |
+| Profiling | Supported | Not yet |
+| Tracing | Supported | Not yet |
+| BramFactor | Supported | Not yet |
+| Active Development | No | Yes |
+
+## Migration from Quartus
+
+To migrate from Quartus to oneAPI:
+
+```python
+# Old Quartus code
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    backend='Quartus',
+    part='Arria10'
+)
+
+# New oneAPI code
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    backend='oneAPI',
+    part='Agilex7'  # or 'Arria10', 'Stratix10'
+)
+```
+
+Key changes:
+- AC datatypes remain compatible
+- Build system: Makefile → CMake
+- Build command: `make` → `make <target>`
+- Executables have extensions: `.fpga_emu`, `.fpga_sim`, `.fpga`
+
+## Example: Complete Workflow
+
+```python
+import hls4ml
+from tensorflow import keras
+import numpy as np
+
+# Load model
+model = keras.models.load_model('my_model.h5')
+
+# Configure
+config = hls4ml.utils.config_from_keras_model(model, granularity='name')
+config['Model']['Strategy'] = 'Resource'
+config['Model']['ReuseFactor'] = 16
+config['Model']['IOType'] = 'io_stream'
+
+# Convert to oneAPI
+hls_model = hls4ml.converters.convert_from_keras_model(
+    model,
+    hls_config=config,
+    output_dir='oneapi_prj',
+    backend='oneAPI',
+    part='Agilex7',
+    clock_period=4,  # 250 MHz
+    hyperopt_handshake=True
+)
+
+# Compile
+hls_model.compile()
+
+# Test with emulation
+print("Running emulation...")
+report_emu = hls_model.build(build_type='fpga_emu', run=True)
+
+# Generate reports
+print("Generating reports...")
+report = hls_model.build(build_type='report', run=False)
+
+print(f"Estimated resources: ALM={report['ALM']}, DSP={report['DSP']}")
+print(f"Estimated fmax: {report['Fmax']} MHz")
+
+# Build for FPGA (optional - takes hours)
+# report_fpga = hls_model.build(build_type='fpga', run=False)
+```
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Quartus Backend" icon="backward" href="/backends/quartus">
+    Legacy Intel HLS backend
+  </Card>
+  <Card title="Intel oneAPI Docs" icon="book" href="https://www.intel.com/content/www/us/en/docs/oneapi/programming-guide/current/intel-oneapi-dpcpp-fpga-optimization-guide.html">
+    Official Intel oneAPI documentation
+  </Card>
+  <Card title="FIFO Depth" icon="water" href="/advanced/fifo-depth">
+    Optimize streaming architectures
+  </Card>
+  <Card title="API Reference" icon="python" href="/api/overview">
+    Python API documentation
+  </Card>
+</CardGroup>

@@ -1,0 +1,525 @@
+---
+title: 'Model Optimizer'
+description: 'Optimization passes and transformations'
+---
+
+## Overview
+
+The optimizer module provides transformation passes that improve model performance, resource usage, and compatibility with HLS backends.
+
+## Optimizer Classes
+
+### OptimizerPass
+
+Base class for all optimizer passes.
+
+```python
+class OptimizerPass:
+    name = None
+    
+    def match(self, node):
+        """Check if this pass applies to the node."""
+        raise NotImplementedError
+    
+    def transform(self, model, node):
+        """Apply transformation to the node."""
+        raise NotImplementedError
+```
+
+### GlobalOptimizerPass
+
+Matches every node in the graph.
+
+```python
+class GlobalOptimizerPass(OptimizerPass):
+    def match(self, node):
+        return True  # Applies to all nodes
+```
+
+### LayerOptimizerPass
+
+Applies to specific layer types.
+
+```python
+class LayerOptimizerPass(OptimizerPass):
+    def __init__(self, name, layer_class, transform):
+        self.name = name
+        self.layer_class = layer_class
+        self.transform_func = transform
+    
+    def match(self, node):
+        return isinstance(node, self.layer_class)
+```
+
+### ModelOptimizerPass
+
+Operates on the entire model.
+
+```python
+class ModelOptimizerPass(OptimizerPass):
+    def __init__(self, name, transform):
+        self.name = name
+        self.transform_func = transform
+    
+    def transform(self, model):
+        return self.transform_func(model)
+```
+
+## Core Functions
+
+### optimize_model
+
+Apply a list of optimization passes to a model.
+
+```python
+hls4ml.model.optimizer.optimize_model(model, passes)
+```
+
+<ParamField path="model" type="ModelGraph" required>
+  The model to optimize.
+</ParamField>
+
+<ParamField path="passes" type="list" required>
+  List of optimizer pass names to apply.
+</ParamField>
+
+<ResponseField name="applied_passes" type="set">
+  Set of passes that were successfully applied.
+</ResponseField>
+
+### Example
+
+```python
+import hls4ml
+
+# Get model
+hls_model = hls4ml.converters.convert_from_keras_model(keras_model)
+
+# Apply specific optimizations
+passes = [
+    'infer_precision',
+    'fuse_consecutive_batch_normalization',
+    'quantize_dense_output'
+]
+
+applied = hls4ml.model.optimizer.optimize_model(hls_model, passes)
+print(f"Applied passes: {applied}")
+```
+
+### register_pass
+
+Register a new optimizer pass.
+
+```python
+hls4ml.model.optimizer.register_pass(name, opt_cls, backend=None)
+```
+
+<ParamField path="name" type="str" required>
+  Name of the optimizer pass.
+</ParamField>
+
+<ParamField path="opt_cls" type="class | instance" required>
+  Optimizer class or instance.
+</ParamField>
+
+<ParamField path="backend" type="str" default="None">
+  Backend to register with (prefixes name with "backend:").
+</ParamField>
+
+<ResponseField name="registered_name" type="str">
+  The full registered name.
+</ResponseField>
+
+### get_optimizer
+
+Retrieve a registered optimizer.
+
+```python
+hls4ml.model.optimizer.get_optimizer(name)
+```
+
+<ParamField path="name" type="str" required>
+  Name of the optimizer pass.
+</ParamField>
+
+<ResponseField name="optimizer" type="OptimizerPass">
+  The optimizer instance.
+</ResponseField>
+
+### get_available_passes
+
+List all registered optimizer passes.
+
+```python
+hls4ml.model.optimizer.get_available_passes()
+```
+
+<ResponseField name="passes" type="list">
+  List of all registered pass names.
+</ResponseField>
+
+### Example
+
+```python
+import hls4ml
+
+# List all available passes
+passes = hls4ml.model.optimizer.get_available_passes()
+print("Available optimizations:")
+for pass_name in passes:
+    print(f"  - {pass_name}")
+
+# Get specific optimizer
+opt = hls4ml.model.optimizer.get_optimizer('infer_precision')
+print(f"Optimizer: {opt.get_name()}")
+```
+
+## Common Optimization Passes
+
+### Precision Inference
+
+**infer_precision**: Automatically infer bit widths for intermediate layers.
+
+```python
+class InferPrecisionPass(OptimizerPass):
+    """Infer precision for layers based on input/output requirements."""
+    
+    def match(self, node):
+        return hasattr(node, 'get_output_variable')
+    
+    def transform(self, model, node):
+        # Analyze bit growth through operations
+        # Set appropriate precision
+        pass
+```
+
+### Layer Fusion
+
+**fuse_consecutive_batch_normalization**: Fuse BatchNorm into previous Conv/Dense layer.
+
+```python
+# Before:
+# Conv -> BatchNorm -> Activation
+
+# After:
+# ConvWithBN -> Activation
+```
+
+**fuse_bias_add**: Merge separate bias addition into the layer.
+
+### Quantization
+
+**quantize_dense_output**: Apply quantization to Dense layer outputs.
+
+**qkeras_factorize**: Extract QKeras quantizers into explicit layers.
+
+### Structural Optimizations
+
+**remove_nop_layers**: Remove layers that don't modify data (Identity, Dropout).
+
+**expand_layer_group**: Expand grouped layers into individual layers.
+
+**convert_to_channels_last**: Convert data format from channels-first to channels-last.
+
+### Resource Optimization
+
+**set_reuse_factor**: Configure reuse factors based on resource constraints.
+
+**apply_resource_strategy**: Apply resource or latency strategy to layers.
+
+## Creating Custom Passes
+
+### Using Decorators
+
+```python
+from hls4ml.model.optimizer import optimizer_pass, layer_optimizer
+from hls4ml.model.layers import Dense
+
+# Layer-specific optimizer
+@layer_optimizer(Dense)
+def initialize_dense_layer(node):
+    """Initialize Dense layer with defaults."""
+    if not node.get_attr('strategy'):
+        node.set_attr('strategy', 'latency')
+    if not node.get_attr('reuse_factor'):
+        node.set_attr('reuse_factor', 1)
+    return False  # No graph modification
+
+# Register the pass
+from hls4ml.model.optimizer import register_pass
+register_pass('initialize_dense', initialize_dense_layer)
+```
+
+### Using Classes
+
+```python
+from hls4ml.model.optimizer import OptimizerPass, register_pass
+import numpy as np
+
+class SparsifyWeights(OptimizerPass):
+    """Zero out small weights below threshold."""
+    
+    def __init__(self, threshold=1e-3):
+        self.threshold = threshold
+    
+    def match(self, node):
+        # Match layers with weights
+        return hasattr(node, 'weights') and 'kernel' in node.weights
+    
+    def transform(self, model, node):
+        kernel = node.weights['kernel']
+        original_nnz = np.count_nonzero(kernel.data)
+        
+        # Apply threshold
+        mask = np.abs(kernel.data) < self.threshold
+        kernel.data[mask] = 0
+        
+        new_nnz = np.count_nonzero(kernel.data)
+        sparsity = 1.0 - (new_nnz / kernel.data.size)
+        
+        print(f"{node.name}: {original_nnz} -> {new_nnz} ({sparsity:.1%} sparse)")
+        
+        return False  # Weights modified, but no graph change
+
+# Register and use
+register_pass('sparsify_weights', SparsifyWeights(threshold=0.01))
+
+hls_model.apply_flow('custom_optimization')
+```
+
+### Model-Level Optimizer
+
+```python
+from hls4ml.model.optimizer import ModelOptimizerPass, register_pass
+
+class PrintResourceEstimate(ModelOptimizerPass):
+    """Estimate resource usage."""
+    
+    def __init__(self):
+        super().__init__('print_resource_estimate', self.estimate)
+    
+    def estimate(self, model):
+        total_ops = 0
+        total_params = 0
+        
+        for layer in model.get_layers():
+            if layer.class_name == 'Dense':
+                n_in = layer.get_attr('n_in')
+                n_out = layer.get_attr('n_out')
+                total_ops += n_in * n_out
+                total_params += n_in * n_out + n_out
+            
+            elif layer.class_name == 'Conv2D':
+                # Calculate conv ops
+                pass
+        
+        print(f"Estimated operations: {total_ops:,}")
+        print(f"Total parameters: {total_params:,}")
+        
+        return False
+
+register_pass('estimate_resources', PrintResourceEstimate())
+```
+
+## Optimization Flows
+
+Flows group related optimizations:
+
+```python
+from hls4ml.model.flow import register_flow
+
+# Define a custom flow
+register_flow('my_optimization_flow', [
+    'remove_nop_layers',
+    'fuse_consecutive_batch_normalization',
+    'infer_precision',
+    'quantize_dense_output',
+    'set_reuse_factor'
+], requires=['convert'])
+
+# Apply the flow
+hls_model.apply_flow('my_optimization_flow')
+```
+
+## Backend-Specific Optimizations
+
+### Vivado Optimizations
+
+```python
+# Vivado-specific passes
+vivado_passes = [
+    'vivado:infer_precision',
+    'vivado:set_precision_concat',
+    'vivado:apply_resource_strategy',
+    'vivado:generate_conv_streaming'
+]
+
+hls_model.apply_flow('vivado:optimize')
+```
+
+### Vitis Optimizations
+
+```python
+# Vitis-specific passes
+vitis_passes = [
+    'vitis:infer_precision',
+    'vitis:optimize_pointwise_conv',
+    'vitis:apply_winograd_kernel_transformation'
+]
+
+hls_model.apply_flow('vitis:optimize')
+```
+
+## Advanced Example
+
+```python
+import hls4ml
+from hls4ml.model.optimizer import OptimizerPass, register_pass
+import numpy as np
+
+class QuantizeActivations(OptimizerPass):
+    """Quantize activation layers to fixed bit-width."""
+    
+    def __init__(self, bits=8, integer=4):
+        self.bits = bits
+        self.integer = integer
+    
+    def match(self, node):
+        return node.class_name == 'Activation'
+    
+    def transform(self, model, node):
+        # Get current precision
+        current_precision = node.get_output_variable().type.precision
+        
+        # Set new precision
+        from hls4ml.model.types import FixedPrecisionType
+        new_precision = FixedPrecisionType(
+            width=self.bits,
+            integer=self.integer,
+            signed=True
+        )
+        
+        # Update output type
+        output_var = node.get_output_variable()
+        output_var.type.precision = new_precision
+        
+        print(f"{node.name}: {current_precision} -> {new_precision}")
+        
+        # Update table precision for lookup-based activations
+        if node.get_attr('activation') in ['sigmoid', 'tanh', 'softmax']:
+            node.set_attr('table_t', new_precision)
+        
+        return False
+
+# Register the optimizer
+register_pass('quantize_activations', QuantizeActivations(bits=8, integer=4))
+
+# Create model
+hls_model = hls4ml.converters.convert_from_keras_model(
+    keras_model,
+    output_dir='optimized_model'
+)
+
+# Apply custom optimization
+from hls4ml.model.optimizer import optimize_model
+optimize_model(hls_model, ['quantize_activations'])
+
+# Compile and test
+hls_model.compile()
+predictions = hls_model.predict(test_data)
+```
+
+## Debugging Optimizations
+
+### Track Applied Passes
+
+```python
+# Get list of applied passes
+applied = hls_model._applied_flows
+print("Applied optimization flows:")
+for flow in applied:
+    print(f"  {flow}")
+```
+
+### Selective Optimization
+
+```python
+# Get all passes
+all_passes = hls4ml.model.optimizer.get_available_passes()
+
+# Filter out specific passes
+exclude = ['optimization_to_skip']
+passes_to_apply = [p for p in all_passes if p not in exclude]
+
+# Apply filtered passes
+hls4ml.model.optimizer.optimize_model(hls_model, passes_to_apply)
+```
+
+### Before/After Comparison
+
+```python
+import copy
+import numpy as np
+
+# Save original model
+original_model = copy.deepcopy(hls_model)
+
+# Apply optimization
+optimize_model(hls_model, ['my_optimization'])
+
+# Compare
+test_input = np.random.rand(10, 784).astype(np.float32)
+
+original_model.compile()
+original_output = original_model.predict(test_input)
+
+hls_model.compile()
+optimized_output = hls_model.predict(test_input)
+
+# Check difference
+diff = np.abs(original_output - optimized_output)
+print(f"Max difference: {np.max(diff)}")
+print(f"Mean difference: {np.mean(diff)}")
+```
+
+## ConfigurableOptimizerPass
+
+Passes that can be configured:
+
+```python
+from hls4ml.model.optimizer import ConfigurableOptimizerPass
+
+class ConfigurableQuantizer(ConfigurableOptimizerPass):
+    def __init__(self):
+        # Default configuration
+        self.bits = 16
+        self.integer = 6
+        self.layers = None  # None = all layers
+    
+    def match(self, node):
+        if self.layers and node.name not in self.layers:
+            return False
+        return node.class_name in ['Dense', 'Conv2D']
+    
+    def transform(self, model, node):
+        # Apply quantization with configured parameters
+        pass
+
+# Register
+from hls4ml.model.optimizer import register_pass
+opt = ConfigurableQuantizer()
+register_pass('configurable_quantizer', opt)
+
+# Configure
+opt.configure(bits=8, integer=3, layers=['dense_1', 'dense_2'])
+
+# Apply
+optimize_model(hls_model, ['configurable_quantizer'])
+```
+
+## See Also
+
+- [ModelGraph](/api/model/model)
+- [Graph Structure](/api/model/graph)
+- [Configuration](/api/utils/config)
+- [Backends](/api/backends/backend)
