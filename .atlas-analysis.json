@@ -1,0 +1,134 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "hls4ml",
+  "projectDescription": "Machine learning inference in FPGAs using high-level synthesis",
+  "theme": "aspen",
+  "primaryColor": "#e3ac3d",
+  "lightColor": "#a5a49f",
+  "darkColor": "#534934",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation",
+              "faq"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/overview",
+              "concepts/model-conversion",
+              "concepts/hls-backends",
+              "concepts/precision-optimization"
+            ]
+          },
+          {
+            "group": "Frontends",
+            "pages": [
+              "frontends/keras",
+              "frontends/pytorch",
+              "frontends/onnx"
+            ]
+          },
+          {
+            "group": "Backends",
+            "pages": [
+              "backends/vivado",
+              "backends/vitis",
+              "backends/quartus",
+              "backends/catapult",
+              "backends/oneapi"
+            ]
+          },
+          {
+            "group": "Advanced Features",
+            "pages": [
+              "advanced/profiling",
+              "advanced/optimization",
+              "advanced/quantization",
+              "advanced/precision-tuning",
+              "advanced/fifo-depth",
+              "advanced/plugins"
+            ]
+          },
+          {
+            "group": "Internals",
+            "pages": [
+              "internals/ir",
+              "internals/model-graph",
+              "internals/flows"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "API Overview",
+            "pages": [
+              "api/overview"
+            ]
+          },
+          {
+            "group": "Converters",
+            "pages": [
+              "api/converters/keras",
+              "api/converters/pytorch",
+              "api/converters/onnx"
+            ]
+          },
+          {
+            "group": "Model",
+            "pages": [
+              "api/model/model",
+              "api/model/graph",
+              "api/model/optimizer"
+            ]
+          },
+          {
+            "group": "Backends",
+            "pages": [
+              "api/backends/backend",
+              "api/backends/fpga"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/utils/config",
+              "api/utils/report"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Convert Keras, PyTorch, and ONNX models to FPGA firmware",
+    "Ultra-low-latency inference (<1μs)",
+    "Support for multiple HLS backends (Vivado, Vitis, Quartus, Catapult, oneAPI)",
+    "Automated precision optimization and quantization",
+    "Profiling and performance analysis tools",
+    "Plugin system for custom layers and operations"
+  ],
+  "publicApiSurface": [
+    "hls4ml.converters.keras_v2_to_hls()",
+    "hls4ml.converters.keras_v3_to_hls()",
+    "hls4ml.converters.pytorch_to_hls()",
+    "hls4ml.converters.onnx_to_hls()",
+    "hls4ml.converters.convert_from_config()",
+    "hls4ml.utils.config.create_config()",
+    "hls4ml.utils.fetch_example_model()",
+    "hls4ml.report.read_vivado_report()",
+    "hls4ml.report.read_quartus_report()",
+    "hls4ml CLI: config, convert, build, report"
+  ]
+}
